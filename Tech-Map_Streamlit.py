@@ -27,7 +27,42 @@ SHOW_INLINE_SEARCH = False
 
 st.markdown("""
 <style>
+<<<<<<< HEAD
 
+=======
+/* —— 顶部留白 & 头/脚去掉 —— */
+div[data-testid="stDecoration"]{display:none!important;}   /* 顶部彩条 */
+header[data-testid="stHeader"]{height:0!important;visibility:hidden!important;}
+footer{display:none!important;}
+.main .block-container{
+  padding-top:.15rem!important;   /* 再次压缩顶部 */
+  padding-bottom:.5rem!important;
+}
+
+/* —— 隐藏刷新时的灰色遮罩/进度条 —— */
+div[role="status"]{display:none!important;}                 /* spinner/status */
+div[data-baseweb="progress-bar"]{display:none!important;}   /* 细进度条 */
+
+/* —— 全局字体再小一号（桌面14px，手机13px） —— */
+html,body,[class*="css"]{font-size:14px;}
+@media (max-width: 640px){
+  html,body,[class*="css"]{font-size:13px;}
+}
+
+/* —— 输入控件更紧凑 —— */
+.stTextInput > div > div > input{height:38px;}
+.stTextInput label{margin-bottom:.25rem!important;}
+
+/* —— 下载按钮做成高对比蓝色 —— */
+.stDownloadButton button{
+  background:#3b82f6!important;color:#fff!important;border:none!important;
+  height:42px;border-radius:8px;font-weight:600;
+}
+.stDownloadButton button:hover{filter:brightness(0.95);}
+</style>
+
+<style>
+>>>>>>> e982f17 (Local working tree)
 /* —— 手机优化（宽度<=820px） —— */
 @media (max-width: 820px){
   /* 主内容与侧边栏内边距更紧凑 */
@@ -39,23 +74,36 @@ st.markdown("""
   [data-testid="stMetricValue"]{ font-size: 1rem !important; }
   [data-testid="stMetricLabel"]{ font-size: .8rem !important; }
 
+<<<<<<< HEAD
   /* 下载按钮更显眼、易点（你已是蓝色，这里放大一点） */
+=======
+  /* 下载按钮更显眼、易点 */
+>>>>>>> e982f17 (Local working tree)
   .stDownloadButton > button, .stButton > button{
     min-height: 38px;
     padding: .5rem .8rem;
     border-radius: 8px;
   }
 
+<<<<<<< HEAD
   /* Folium iframe 自适应手机视口高度（覆盖 st_folium 的固定 px） */
+=======
+  /* Folium iframe 自适应手机视口高度（覆盖 st_folium 固定 px） */
+>>>>>>> e982f17 (Local working tree)
   div[data-testid="stIFrame"] iframe{
     width: 100% !important;
     height: 68vh !important;
   }
+<<<<<<< HEAD
+=======
+
+>>>>>>> e982f17 (Local working tree)
   /* 新版移动端浏览器用 dvh 更准确 */
   @supports (height: 1dvh){
     div[data-testid="stIFrame"] iframe{ height: 70dvh !important; }
   }
 
+<<<<<<< HEAD
   /* 横向并排的控件在手机上自动纵向堆叠，避免挤压 */
   [data-testid="column"]{ width: 100% !important; flex: 0 0 100% !important; }
 }
@@ -68,6 +116,25 @@ st.markdown("""
 /* 进一步隐藏 Chrome 等的自动填充按钮（可选） */
 input[autocomplete="off"]::-webkit-contacts-auto-fill-button,
 input[autocomplete="off"]::-webkit-credentials-auto-fill-button {
+=======
+  /* 横向并排控件在手机上改为纵向堆叠 */
+  [data-testid="column"]{
+    width: 100% !important;
+    flex: 0 0 100% !important;
+  }
+}
+
+/* 仍然隐藏运行时的全屏灰遮罩（兜底） */
+.stSpinner, .stSpinnerOverlay, .st-emotion-cache-1erivf3{
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* 隐藏 Chrome 自动填充按钮（可选） */
+input[autocomplete="off"]::-webkit-contacts-auto-fill-button,
+input[autocomplete="off"]::-webkit-credentials-auto-fill-button{
+>>>>>>> e982f17 (Local working tree)
   visibility: hidden; display: none !important; pointer-events: none;
 }
 </style>
@@ -434,6 +501,28 @@ if (not geo_level.startswith("郡")) and unit_choice != '全部':
     mask &= (df['City'] == unit_choice)
 filtered = df.loc[mask].copy()
 
+<<<<<<< HEAD
+=======
+# ==== 顶置搜索（移到更靠上） ====
+sc1, sc2 = st.columns([0.5, 0.5])
+with sc1:
+    q_name = st.text_input(
+        "维修工名称",
+        key="q_name",
+        placeholder="例如：ACME Tech",
+        autocomplete="off",      # 不出现下拉联想
+        label_visibility="visible",
+    )
+with sc2:
+    q_addr = st.text_input(
+        "地址关键词",
+        key="q_addr",
+        placeholder="城市、州、街道或ZIP",
+        autocomplete="off",      # 不出现下拉联想
+        label_visibility="visible",
+    )
+
+>>>>>>> e982f17 (Local working tree)
 # —— 优选规则 —— #
 st.sidebar.subheader("优选规则")
 good_levels = st.sidebar.multiselect("等级筛选", [1,2,3,4,5,6], default=[1,2])
@@ -595,6 +684,7 @@ centroids_to_plot = (centroids_to_plot
                      .head(max_units)
                      .copy())
 
+<<<<<<< HEAD
 # —— 搜索栏（名称 / 地址，并排，小框；仅影响地图点位） —— #
 c1, c2 = st.columns([0.5, 0.5])
 with c1:
@@ -613,6 +703,9 @@ with c2:
         autocomplete="off",              # ← 关闭下拉联想
         label_visibility="visible",
     )
+=======
+
+>>>>>>> e982f17 (Local working tree)
 # 作为底图展示的点位集合（受左侧筛选影响）
 points = filtered.dropna(subset=['Latitude','Longitude']).copy()
 if only_show_good_points:
@@ -897,6 +990,7 @@ legend_html = """
 m.get_root().html.add_child(folium.Element(legend_html))
 folium.LayerControl(collapsed=True).add_to(m)
 
+<<<<<<< HEAD
 # === 导出：当前筛选下“没有任何维修工”的郡（Excel） ===
 st.markdown("---")
 
@@ -986,6 +1080,90 @@ with col_dl:
             except Exception as e:
                 st.warning(f"无法保存到本地文件夹：{e}")
 
+=======
+# === 导出：当前筛选下“没有任何维修工”的郡/城市（按半径+阈值） ===
+st.markdown("---")
+
+# 按当前地理层级决定标签
+unit_key = 'County' if geo_level.startswith("郡") else 'City'
+label_total   = "统计的郡数" if unit_key == 'County' else "统计的城市数"
+label_yes     = "有维修工的郡" if unit_key == 'County' else "有维修工的城市"
+label_no      = "没有维修工的郡" if unit_key == 'County' else "没有维修工的城市"
+
+# 用你前面已经构建好的 base_master（已按州/郡/市筛选，且包含 good_in_radius / meets）
+cm_units = base_master.copy()
+
+# 指标：随 radius_miles / min_good / good_levels 实时变化
+total_units  = len(cm_units)
+covered_units = int(cm_units['meets'].sum())          # 达标（圈内≥min_good 的“好工”）
+empty_units   = total_units - covered_units           # 不达标
+empty_rate    = (empty_units / total_units) if total_units else 0
+
+# 顶部一行：三枚指标 + 右侧下载
+left, mid, right, dl = st.columns([0.9, 0.9, 0.9, 1.1])
+
+with left:
+    st.metric(label_total, f"{total_units:,}")
+with mid:
+    st.metric(label_yes, f"{covered_units:,}")
+with right:
+    st.metric(label_no, f"{empty_units:,}", f"{empty_rate:.1%} 空白率")
+
+# 导出“不达标”的范围列表（即 meets == False）
+gaps = cm_units[~cm_units['meets']].copy()
+# 为了兼容你之前的列名，这里把圈内“好工”数写到 workers_count
+gaps['workers_count'] = gaps['good_in_radius'].astype(int)
+
+
+ # —— 指标后的导出设置 —— 
+unit_key = 'County' if geo_level.startswith("郡") else 'City'
+
+if unit_key == 'County':
+    outcols   = ["State", "County", "ZIP_count", "ZIPs", "cLat", "cLng", "workers_count"]
+    sort_cols = ["State", "County"]
+else:
+    outcols   = ["State", "City", "cLat", "cLng", "workers_count"]
+    sort_cols = ["State", "City"]
+
+# 只保留确实存在的列，避免 KeyError
+outcols_present = [c for c in outcols if c in gaps.columns]
+gaps_sorted = gaps[outcols_present].sort_values(sort_cols).copy()
+
+# 县模式下把 ZIPs 列表展开为字符串（逗号分隔）
+if "ZIPs" in gaps_sorted.columns:
+    def _z_to_str(z):
+        if isinstance(z, (list, tuple, set, np.ndarray)):
+            return ", ".join(sorted(map(str, z)))
+        return "" if pd.isna(z) else str(z)
+    gaps_sorted["ZIPs"] = gaps_sorted["ZIPs"].apply(_z_to_str)
+
+# 生成下载文件
+tag    = f"r{int(radius_miles)}_min{int(min_good)}"
+prefix = "counties" if unit_key == "County" else "cities"
+fname  = f"{prefix}_not_meeting_threshold_{tag}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+excel_bytes = _build_empty_counties_xlsx(gaps_sorted)
+
+
+with dl:
+    clicked = st.download_button(
+        "下载",
+        data=excel_bytes,
+        file_name=fname,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key="dl_top"
+    )
+if clicked:
+        try:
+            save_path = os.path.join(data_dir, fname)
+            with open(save_path, "wb") as f:
+                f.write(excel_bytes.getbuffer())
+            st.toast(f"已保存到：{save_path}")
+        except Exception as e:
+            st.warning(f"无法保存到本地文件夹：{e}")
+
+   
+>>>>>>> e982f17 (Local working tree)
 # —— 渲染 —— #
 if globals().get('USE_STATIC_MAP'):
     from streamlit.components.v1 import html
