@@ -4,3 +4,4 @@ numpy==1.26.4
 folium==0.16.0
 streamlit-folium==0.19.0
 pgeocode==0.5.0
+openpyxl==3.1.2
