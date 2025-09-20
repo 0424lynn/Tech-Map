@@ -12,7 +12,12 @@ from folium.plugins import FastMarkerCluster  # 用于大批量点位聚合（�
 st.set_page_config(page_title="Tech Map", layout="wide")
 
 # ===================== ① 固定文件夹持久化（读取/保存） =====================
-DATA_DIR_DEFAULT = r"C:\Users\jeffy\chris\tech map"
+#本地测试
+# DATA_DIR_DEFAULT = r"C:\Users\jeffy\chris\tech map"
+# 云服务器
+DEFAULT_WIN = r"C:\Users\jeffy\chris\tech map"
+DATA_DIR_DEFAULT = DEFAULT_WIN if os.path.exists(DEFAULT_WIN) else os.path.join(os.getcwd(), "data")
+os.makedirs(DATA_DIR_DEFAULT, exist_ok=True)
 SUPPORT_EXTS = (".csv", ".xlsx", ".xls")
 
 st.sidebar.markdown("### 数据源（固定文件夹）")
