@@ -27,88 +27,41 @@ SHOW_INLINE_SEARCH = False
 
 st.markdown("""
 <style>
-/* —— 顶部留白 & 头/脚去掉 —— */
-div[data-testid="stDecoration"]{display:none!important;}   /* 顶部彩条 */
+/* —— 去掉装饰条/页头/页脚 —— */
+div[data-testid="stDecoration"]{display:none!important;}
 header[data-testid="stHeader"]{height:0!important;visibility:hidden!important;}
 footer{display:none!important;}
-.main .block-container{
-  padding-top:.15rem!important;   /* 再次压缩顶部 */
-  padding-bottom:.5rem!important;
+:root, .stApp { --top-toolbar-height:0px !important; }
+
+/* —— 主内容区彻底贴顶（务必放在最后，优先级最高） —— */
+.stAppViewContainer{ padding-top:0!important; }
+.main .block-container{ padding-top:0!important; margin-top:0!important; }
+.main .block-container > div:first-child{ margin-top:0!important; padding-top:0!important; }
+div[data-testid="stVerticalBlock"],
+div[data-testid="stHorizontalBlock"]{ margin-top:0!important; padding-top:0!important; }
+div[data-testid="stIFrame"]{ margin-top:0!important; }
+
+/* —— 隐藏刷新时的灰条/转圈 —— */
+div[role="status"], div[data-baseweb="progress-bar"]{display:none!important;}
+.stSpinner, .stSpinnerOverlay{display:none!important;opacity:0!important;pointer-events:none!important;}
+
+/* —— 下载按钮：蓝底白字 —— */
+.stDownloadButton > button{
+  background:#2563eb!important; color:#fff!important;
+  border:1px solid #1d4ed8!important; border-radius:8px!important;
+  box-shadow:0 2px 6px rgba(37,99,235,.25)!important;
 }
 
-/* —— 隐藏刷新时的灰色遮罩/进度条 —— */
-div[role="status"]{display:none!important;}                 /* spinner/status */
-div[data-baseweb="progress-bar"]{display:none!important;}   /* 细进度条 */
-
-/* —— 全局字体再小一号（桌面14px，手机13px） —— */
-html,body,[class*="css"]{font-size:14px;}
-@media (max-width: 640px){
-  html,body,[class*="css"]{font-size:13px;}
-}
-
-/* —— 输入控件更紧凑 —— */
-.stTextInput > div > div > input{height:38px;}
-.stTextInput label{margin-bottom:.25rem!important;}
-
-/* —— 下载按钮做成高对比蓝色 —— */
-.stDownloadButton button{
-  background:#3b82f6!important;color:#fff!important;border:none!important;
-  height:42px;border-radius:8px;font-weight:600;
-}
-.stDownloadButton button:hover{filter:brightness(0.95);}
-</style>
-
-<style>
-/* —— 手机优化（宽度<=820px） —— */
+/* —— 手机优化 —— */
 @media (max-width: 820px){
-  /* 主内容与侧边栏内边距更紧凑 */
-  .main .block-container{ padding: .35rem .5rem !important; }
-  section[data-testid="stSidebar"] > div{ padding-top: .25rem !important; }
-
-  /* 字体整体缩小一点，指标更紧凑 */
-  html, body, [class*="css"]{ font-size: 14px !important; }
-  [data-testid="stMetricValue"]{ font-size: 1rem !important; }
-  [data-testid="stMetricLabel"]{ font-size: .8rem !important; }
-
-  /* 下载按钮更显眼、易点 */
-  .stDownloadButton > button, .stButton > button{
-    min-height: 38px;
-    padding: .5rem .8rem;
-    border-radius: 8px;
-  }
-
-  /* Folium iframe 自适应手机视口高度（覆盖 st_folium 固定 px） */
-  div[data-testid="stIFrame"] iframe{
-    width: 100% !important;
-    height: 68vh !important;
-  }
-
-  /* 新版移动端浏览器用 dvh 更准确 */
-  @supports (height: 1dvh){
-    div[data-testid="stIFrame"] iframe{ height: 70dvh !important; }
-  }
-
-  /* 横向并排控件在手机上改为纵向堆叠 */
-  [data-testid="column"]{
-    width: 100% !important;
-    flex: 0 0 100% !important;
-  }
-}
-
-/* 仍然隐藏运行时的全屏灰遮罩（兜底） */
-.stSpinner, .stSpinnerOverlay, .st-emotion-cache-1erivf3{
-  display: none !important;
-  opacity: 0 !important;
-  pointer-events: none !important;
-}
-
-/* 隐藏 Chrome 自动填充按钮（可选） */
-input[autocomplete="off"]::-webkit-contacts-auto-fill-button,
-input[autocomplete="off"]::-webkit-credentials-auto-fill-button{
-  visibility: hidden; display: none !important; pointer-events: none;
+  .main .block-container{ padding:.35rem .5rem !important; }
+  section[data-testid="stSidebar"] > div{ padding-top:.25rem !important; }
+  [data-testid="column"]{ width:100% !important; flex:0 0 100% !important; }
+  div[data-testid="stIFrame"] iframe{ width:100%!important; height:70dvh!important; }
 }
 </style>
 """, unsafe_allow_html=True)
+
 st.markdown("""
 <style>
 /* —— 全局基础字号（整体变小） —— */
@@ -153,11 +106,18 @@ section[data-testid="stSidebar"], section[data-testid="stSidebar"] * { font-size
 # —— 压缩顶部与分割线间距 —— #
 st.markdown("""
 <style>
-.main .block-container { padding-top: 0.6rem !important; }
-section[data-testid="stSidebar"] > div { padding-top: 0.4rem !important; }
-hr { margin: 0.3rem 0 !important; }
+/* 主区贴顶，不要再把它改回非 0 */
+.main .block-container { padding-top: 0 !important; margin-top: 0 !important; }
+/* 第一块组件也不留空 */
+.main .block-container > div:first-child{ margin-top:0!important; padding-top:0!important; }
+/* 侧边栏可以留很小的顶距，不影响主区 */
+section[data-testid="stSidebar"] > div { padding-top: 0.2rem !important; }
+/* 分割线更紧凑 */
+hr { margin: 0.2rem 0 !important; }
 </style>
 """, unsafe_allow_html=True)
+
+
 
 st.markdown("""
 <style>
@@ -179,6 +139,8 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
+
+
 
 
 # ===================== ① 固定文件夹持久化（读取/保存） =====================
@@ -455,11 +417,11 @@ else:
     unit_label = "选择城市 (City)"
 unit_choice = st.sidebar.selectbox(unit_label, ['全部'] + units)
 
-# 性能设置
-with st.sidebar.expander("⚡ 性能设置", expanded=False):
-    use_cluster = st.checkbox("点位聚合（多点更快）", value=True)
-    prefer_canvas = st.checkbox("Canvas 渲染矢量", value=True)
-    max_units = st.slider("最多渲染范围数（郡/城市圈）", 200, 5000, 1500, 100)
+# 读取性能参数（若 session 里没有就给默认）
+use_cluster   = st.session_state.get("perf_use_cluster", True)
+prefer_canvas = st.session_state.get("perf_prefer_canvas", True)
+max_units     = st.session_state.get("perf_max_units", 1500)
+
 
 # 维修工点位基础筛选
 mask = pd.Series(True, index=df.index)
@@ -506,6 +468,8 @@ with st.sidebar.expander("📁 数据源（固定文件夹）", expanded=False):
         value=st.session_state.data_dir_path,
         help="可填本地或共享盘路径，例如 D:\\data 或 \\\\SERVER\\share"
     )
+
+
     if new_dir != st.session_state.data_dir_path:
         st.session_state.data_dir_path = new_dir
     os.makedirs(st.session_state.data_dir_path, exist_ok=True)
@@ -555,6 +519,14 @@ with st.sidebar.expander("📁 数据源（固定文件夹）", expanded=False):
             f"载入时间：{meta.get('loaded_at','')}\n\n"
             f"行数：{len(st.session_state.df)}"
         )
+
+# === 侧边栏最底部：⚡ 性能设置 ===
+with st.sidebar.expander("⚡ 性能设置", expanded=False):
+    st.checkbox("点位聚合（多点更快）", key="perf_use_cluster",
+                value=st.session_state.get("perf_use_cluster", use_cluster))
+    st.checkbox("Canvas 渲染矢量", key="perf_prefer_canvas",
+                value=st.session_state.get("perf_prefer_canvas", prefer_canvas))
+    st.slider("最多渲染范围数（郡/城市圈）", 200, 5000, int(max_units), 100, key="perf_max_units")
 
 # ===================== 进一步筛选：名称/地址搜索（替代 郡→ZIP 列表） =====================
 if SHOW_INLINE_SEARCH:
@@ -834,6 +806,9 @@ else:
                    f"ZIP:{row.get('ZIP','')}")
         ).add_to(workers_fg)
 
+        # 图层开关（放左上，避免被右上角图例挡住）
+folium.LayerControl(collapsed=True, position='topleft').add_to(m)
+
       # —— 大号红旗（锚点对齐版）——
 def big_flag_icon(size_px: int = 42, anchor_y_factor: float = 0.92) -> folium.DivIcon:
     anchor_y = int(size_px * anchor_y_factor)   # 0.88~0.96 之间微调
@@ -918,23 +893,39 @@ fit_initial_or_search(
     search_active if 'search_active' in locals() else False
 )
 
+# —— 右上角窄版图例：等级颜色 + 数量 + 总数 —— #
+lvl_order = [1, 2, 3, 4, 5, 6]
+lvl_counts = {lvl: int(points['Level'].eq(lvl).sum()) for lvl in lvl_order}
+total_points = int(points.shape[0])
 
-# —— 图例 —— #
-legend_html = """
-<div style="position: fixed; bottom: 18px; left: 18px; z-index: 9999;
-            background: white; padding: 10px 12px; border-radius: 8px;
-            box-shadow: 0 2px 6px rgba(0,0,0,.2); font-size: 13px; line-height: 1.6;">
-  <b>等级颜色</b><br>
-  <span style="display:inline-block;width:12px;height:12px;background:#2ecc71;margin-right:6px;"></span>1 绿色<br>
-  <span style="display:inline-block;width:12px;height:12px;background:#FFD700;margin-right:6px;"></span>2 黄色<br>
-  <span style="display:inline-block;width:12px;height:12px;background:#FF4D4F;margin-right:6px;"></span>3 红色<br>
-  <span style="display:inline-block;width:12px;height:12px;background:#FFC0CB;margin-right:6px;"></span>4 粉色<br>
-  <span style="display:inline-block;width:12px;height:12px;background:#8A2BE2;margin-right:6px;"></span>5 紫色<br>
-  <span style="display:inline-block;width:12px;height:12px;background:#000000;margin-right:6px;"></span>6 黑色
+legend_html = f"""
+<div style="
+  position: fixed; top: 12px; right: 12px; z-index: 9999;
+  background: #fff; padding: 6px 8px; border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0,0,0,.20); font-size: 12px; line-height: 1.4;
+  width: max-content; max-width: 180px; border: 1px solid rgba(0,0,0,.08);
+">
+  <div style="font-weight:600; margin-bottom:4px;">等级颜色</div>
+
+  <div style="display:grid; grid-template-columns: auto auto; grid-column-gap:8px; grid-row-gap:4px; align-items:center;">
+    <span><span style='display:inline-block;width:10px;height:10px;background:#2ecc71;margin-right:6px;border-radius:2px;'></span>1</span><span>{lvl_counts.get(1,0)}</span>
+    <span><span style='display:inline-block;width:10px;height:10px;background:#FFD700;margin-right:6px;border-radius:2px;'></span>2</span><span>{lvl_counts.get(2,0)}</span>
+    <span><span style='display:inline-block;width:10px;height:10px;background:#FF4D4F;margin-right:6px;border-radius:2px;'></span>3</span><span>{lvl_counts.get(3,0)}</span>
+    <span><span style='display:inline-block;width:10px;height:10px;background:#FFC0CB;margin-right:6px;border-radius:2px;'></span>4</span><span>{lvl_counts.get(4,0)}</span>
+    <span><span style='display:inline-block;width:10px;height:10px;background:#8A2BE2;margin-right:6px;border-radius:2px;'></span>5</span><span>{lvl_counts.get(5,0)}</span>
+    <span><span style='display:inline-block;width:10px;height:10px;background:#000;margin-right:6px;border-radius:2px;border:1px solid #eee;'></span>6</span><span>{lvl_counts.get(6,0)}</span>
+  </div>
+
+  <div style="margin-top:6px; border-top:1px dashed #e5e7eb; padding-top:6px; font-weight:600;">
+    总数：{total_points}
+  </div>
 </div>
 """
+
 m.get_root().html.add_child(folium.Element(legend_html))
-folium.LayerControl(collapsed=True).add_to(m)
+
+
+
 
 # === 导出：当前筛选下“没有任何维修工”的郡/城市（按半径+阈值） ===
 st.markdown("---")
