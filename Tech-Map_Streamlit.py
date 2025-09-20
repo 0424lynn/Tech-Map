@@ -987,9 +987,10 @@ with col_dl:
                 st.warning(f"无法保存到本地文件夹：{e}")
 
 # —— 渲染 —— #
-if 'USE_STATIC_MAP' in globals() and USE_STATIC_MAP:
+if globals().get('USE_STATIC_MAP'):
     from streamlit.components.v1 import html
     html(m.get_root().render(), height=800)  # 无灰屏、放大/缩小不触发 rerun
 else:
-    map_height = 800  # 桌面基准高度；手机会被上面的 CSS 改成 70dvh
-st_folium(m, height=map_height)
+    map_height = st.session_state.get("map_height", 800)  # 桌面基准高度；手机CSS会调
+    st_folium(m, use_container_width=True, height=map_height)
+
