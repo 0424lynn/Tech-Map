@@ -200,7 +200,7 @@ def clean_num(x):
 df['Latitude']  = df[lat_col].apply(clean_num)
 df['Longitude'] = df[lon_col].apply(clean_num)
 
-# Level 容错到 1-5
+# Level 容错到 1-6
 if 'Level' not in df.columns:
     st.error("缺少必要列：Level")
     st.stop()
@@ -209,7 +209,7 @@ def to_level(x):
     m = re.search(r'(\d+)', str(x))
     if m:
         v = int(m.group(1))
-        return v if 1 <= v <= 5 else np.nan
+        return v if 1 <= v <= 6 else np.nan   # ← 原来是 <= 5
     return np.nan
 df['Level'] = df['Level'].apply(to_level)
 
@@ -276,7 +276,8 @@ st.sidebar.markdown("---")
 geo_level = st.sidebar.selectbox("显示范围", ["郡（County）", "城市（City）"], index=0)  # 默认郡
 
 # 等级筛选
-levels_present = sorted([int(x) for x in df['Level'].dropna().unique().tolist()]) or [1,2,3,4,5]
+levels_present = sorted([int(x) for x in df['Level'].dropna().unique().tolist()]) or [1,2,3,4,5,6]
+
 level_choice = st.sidebar.selectbox('选择等级', ['全部'] + levels_present, index=0)
 
 # 州筛选（从对应主表取）
@@ -316,7 +317,8 @@ filtered = df.loc[mask].copy()
 
 # —— 优选规则 —— #
 st.sidebar.subheader("优选规则")
-good_levels = st.sidebar.multiselect("哪些等级算“好”？", [1,2,3,4,5], default=[1,2])
+good_levels = st.sidebar.multiselect("等级筛选", [1,2,3,4,5,6], default=[1,2])
+
 radius_miles = st.sidebar.slider("半径（英里）", 5, 50, 20, 5)
 min_good = st.sidebar.number_input("圈内≥ 好维修工数量", 1, 10, 2, 1)
 only_show_units = st.sidebar.checkbox("只显示达标范围", value=True)  # 范围=郡或城市
@@ -420,7 +422,14 @@ def load_us_states_geojson():
         st.warning(f"州界数据下载失败：{e}")
         return None
 
-level_color = {1:'#2ecc71', 2:'#FFD700', 3:'#FF4D4F', 4:'#FFC0CB', 5:'#8A2BE2'}
+level_color = {
+    1:'#2ecc71',  # 绿
+    2:'#FFD700',  # 黄
+    3:'#FF4D4F',  # 红
+    4:'#FFC0CB',  # 粉
+    5:'#8A2BE2',  # 紫
+    6:'#000000',  # 黑
+}
 
 # 初始中心
 default_center = [39.5, -98.35]
@@ -612,7 +621,8 @@ legend_html = """
   <span style="display:inline-block;width:12px;height:12px;background:#FFD700;margin-right:6px;"></span>2 黄色<br>
   <span style="display:inline-block;width:12px;height:12px;background:#FF4D4F;margin-right:6px;"></span>3 红色<br>
   <span style="display:inline-block;width:12px;height:12px;background:#FFC0CB;margin-right:6px;"></span>4 粉色<br>
-  <span style="display:inline-block;width:12px;height:12px;background:#8A2BE2;margin-right:6px;"></span>5 紫色
+  <span style="display:inline-block;width:12px;height:12px;background:#8A2BE2;margin-right:6px;"></span>5 紫色<br>
+  <span style="display:inline-block;width:12px;height:12px;background:#000000;margin-right:6px;"></span>6 黑色
 </div>
 """
 m.get_root().html.add_child(folium.Element(legend_html))
