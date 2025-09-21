@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -5,215 +6,214 @@ import folium
 from streamlit_folium import st_folium
 from datetime import datetime
 import re, os, json, urllib.request
-import io  # 用于内存写 Excel
+import io
+import requests, time
+from folium.plugins import MarkerCluster
 
-def _build_empty_counties_xlsx(df_to_export: pd.DataFrame) -> io.BytesIO:
-    """把空白郡 DataFrame 写入 Excel 并返回内存字节流"""
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df_to_export.to_excel(writer, index=False, sheet_name="EmptyCounties")
-    buf.seek(0)
-    return buf
-
-# 【新增】性能相关
-from folium.plugins import FastMarkerCluster  # 用于大批量点位聚合（可选）
-
+# ======================
+# 基础设置
+# ======================
 st.set_page_config(page_title="Tech Map", layout="wide")
+USE_STATIC_MAP = True  # Folium 用原生 HTML 渲染，更快
 
-# 不回传交互事件，完全前端渲染 → 不会出现灰色遮罩
-USE_STATIC_MAP = True
+# ---------- 正则 ----------
+HVAC_PAT_STR = (
+    r"(hvac|air\s*conditioning|\bac\b|a/?c|heating|heat\s*pump|furnace|boiler|"
+    r"refrigeration|cooling|ventilation|duct|chiller|mini\s*split|split\s*system|"
+    r"thermo\s*stat|compressor|refrigerant|制冷|制热|暖通|空调|冷冻|冷库|冷气|冷暖|暖气|通风)"
+)
+BLACK_PAT_STR = (
+    r"(?:at[&\s]*t|verizon|t[-\s]*mobile|cricket|boost\s*mobile|"
+    r"metro(?:\s*pcs|\s*by\s*t[-\s]*mobile)?|xfinity|comcast|spectrum|sprint|"
+    r"u\.?\s*s\.?\s*cellular|cell(?:ular)?|mobile|phone|iphone|android|"
+    r"computer|pc|laptop|electronics|tv|best\s*buy|geek\s*squad|apple\s*store|"
+    r"samsung|gamestop|"
+    r"auto|car|truck|dealer(?:ship)?|motor\s*sports|body\s*shop|collision|"
+    r"brake|tire|alignment|transmission|oil\s*change|smog|muffler|lube|"
+    r"towing|tow|dismantler|parts?|quick\s*lube|"
+    r"pep\s*boys|firestone|goodyear|jiffy\s*lube|valvoline|mobil\s*1|"
+    r"honda|toyota|chevrolet|ford"
+    r")"
+)
+HVAC_RE  = re.compile(HVAC_PAT_STR,  re.IGNORECASE)
+BLACK_RE = re.compile(BLACK_PAT_STR, re.IGNORECASE)
 
-SHOW_INLINE_SEARCH = False
+# ---------- 图标 ----------
+def blue_wrench_icon(size_px: int = 24):
+    return folium.DivIcon(
+        html=f"""
+        <div style="filter: drop-shadow(0 0 2px rgba(0,0,0,.35));">
+          <span style="font-size:{size_px}px; line-height:1;">🔧</span>
+        </div>
+        """,
+        icon_size=(size_px, size_px),
+        icon_anchor=(size_px // 2, int(size_px * 0.92)),
+    )
 
+def big_flag_icon(size_px: int = 42, anchor_y_factor: float = 0.92):
+    anchor_y = int(size_px * anchor_y_factor)
+    return folium.DivIcon(
+        html=f'''
+        <div style="filter: drop-shadow(0 0 1px #fff) drop-shadow(0 0 6px rgba(0,0,0,.35));">
+          <span style="font-size:{size_px}px; line-height:1;">🚩</span>
+        </div>
+        ''',
+        icon_size=(size_px, size_px),
+        icon_anchor=(size_px // 2, anchor_y)
+    )
+
+# ---------- 读取 Google Key ----------
+def _read_api_key():
+    key = os.environ.get("GOOGLE_PLACES_API_KEY")
+    if key:
+        return key
+    candidate_paths = [
+        os.path.join(os.path.expanduser("~"), ".streamlit", "secrets.toml"),
+        os.path.join(os.getcwd(), ".streamlit", "secrets.toml"),
+        os.path.join(os.path.dirname(__file__), ".streamlit", "secrets.toml"),
+    ]
+    if any(os.path.exists(p) for p in candidate_paths):
+        try:
+            return st.secrets.get("GOOGLE_PLACES_API_KEY", None)
+        except Exception:
+            pass
+    return None
+
+GOOGLE_PLACES_KEY = _read_api_key()
+def _mask_key(k: str, keep=6):
+    if not k: return ""
+    k = str(k).strip()
+    return k[:keep] + "…" + str(len(k))
+
+# ======================
+# 全局样式（更紧凑 + 品牌）
+# ======================
 st.markdown("""
 <style>
-/* —— 去掉装饰条/页头/页脚 —— */
+/* 去掉默认装饰 */
 div[data-testid="stDecoration"]{display:none!important;}
 header[data-testid="stHeader"]{height:0!important;visibility:hidden!important;}
 footer{display:none!important;}
 :root, .stApp { --top-toolbar-height:0px !important; }
 
-/* —— 主内容区彻底贴顶（务必放在最后，优先级最高） —— */
+/* 主区更紧凑 */
 .stAppViewContainer{ padding-top:0!important; }
-.main .block-container{ padding-top:0!important; margin-top:0!important; }
-.main .block-container > div:first-child{ margin-top:0!important; padding-top:0!important; }
-div[data-testid="stVerticalBlock"],
-div[data-testid="stHorizontalBlock"]{ margin-top:0!important; padding-top:0!important; }
-div[data-testid="stIFrame"]{ margin-top:0!important; }
+.main .block-container{ padding-top:.15rem!important; margin-top:0!important; }
+.main .block-container > div{ margin-top:.35rem!important; }
 
-/* —— 隐藏刷新时的灰条/转圈 —— */
-div[role="status"], div[data-baseweb="progress-bar"]{display:none!important;}
-.stSpinner, .stSpinnerOverlay{display:none!important;opacity:0!important;pointer-events:none!important;}
+/* 缩小列块间距（搜索行下面更近） */
+div[data-testid="stHorizontalBlock"]{ margin-bottom:.15rem!important; }
 
-/* —— 下载按钮：蓝底白字 —— */
+/* 两侧标题间距更小 */
+h2, h3, h4 { margin: .35rem 0 .25rem 0 !important; }
+
+/* 侧边栏品牌条 */
+#brandbox{
+  margin:0 0 .35rem 0; padding:.55rem .6rem .5rem .6rem;
+  border-radius:12px; border:1px solid rgba(0,0,0,.06);
+  background:linear-gradient(135deg,#0ea5e9 0%,#2563eb 60%,#1e3a8a 100%);
+  color:#fff; font-weight:800; letter-spacing:.6px; line-height:1.15;
+  box-shadow:0 2px 8px rgba(0,0,0,.12); font-size:16px;
+}
+#brandbox small{ display:block; opacity:.9; font-weight:600; letter-spacing:.3px; font-size:12px; }
+
+/* 控件字体 */
+html, body, .stApp, .main .block-container { font-size: 13px !important; }
+section[data-testid="stSidebar"], section[data-testid="stSidebar"] * { font-size: 12.5px !important; }
+
+/* 分割线更薄更紧凑 */
+hr { margin: .2rem 0 !important; }
+
+/* Folium IFrame 顶部更贴近 */
+div[data-testid="stIFrame"]{ margin-top: .15rem!important; }
+
+/* 下载按钮美化 */
 .stDownloadButton > button{
   background:#2563eb!important; color:#fff!important;
   border:1px solid #1d4ed8!important; border-radius:8px!important;
   box-shadow:0 2px 6px rgba(37,99,235,.25)!important;
 }
+.stDownloadButton > button:hover { background-color: #1e40af !important; border-color: #1e3a8a !important; }
+.stDownloadButton > button:active { background-color: #1d4ed8 !important; transform: translateY(0.5px); }
 
-/* —— 手机优化 —— */
-@media (max-width: 820px){
-  .main .block-container{ padding:.35rem .5rem !important; }
-  section[data-testid="stSidebar"] > div{ padding-top:.25rem !important; }
-  [data-testid="column"]{ width:100% !important; flex:0 0 100% !important; }
-  div[data-testid="stIFrame"] iframe{ width:100%!important; height:70dvh!important; }
-}
+/* 侧边栏更靠顶部 */
+section[data-testid="stSidebar"] > div { padding-top: .2rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
-<style>
-/* —— 全局基础字号（整体变小） —— */
-html, body, .stApp, .main .block-container { font-size: 13px !important; }
-
-/* 侧边栏整体缩小 */
-section[data-testid="stSidebar"], section[data-testid="stSidebar"] * { font-size: 12.5px !important; }
-
-/* 各种表单控件的字 */
-.stTextInput, .stNumberInput, .stSelectbox, .stMultiSelect, .stRadio, .stCheckbox, .stSlider, .stDateInput,
-.stTextInput *, .stNumberInput *, .stSelectbox *, .stMultiSelect * , .stRadio * , .stCheckbox * , .stSlider * , .stDateInput * {
-  font-size: 12.5px !important;
-}
-
-/* 按钮 */
-.stButton > button { font-size: 12.5px !important; padding: 0.35rem 0.7rem !important; }
-
-/* metric 组件数字稍小 */
-[data-testid="stMetricValue"] { font-size: 20px !important; }
-[data-testid="stMetricDelta"] { font-size: 11px !important; }
-[data-testid="stMetricLabel"] { font-size: 11.5px !important; }
-
-/* 表格/数据框 */
-.stDataFrame, .stDataFrame * { font-size: 12px !important; }
-
-/* 单选/复选横向标签 */
-[role="radiogroup"] label, .stCheckbox > label { font-size: 12.5px !important; }
-
-/* Leaflet（Folium）里的字：图层开关、tooltip、popup */
-.leaflet-control-layers, .leaflet-container .leaflet-control-attribution,
-.leaflet-tooltip, .leaflet-popup-content { font-size: 12px !important; }
-
-/* 让 LayerControl 的标题/选项更紧凑一点 */
-.leaflet-control-layers label { line-height: 1.1 !important; }
-
-/* 下载按钮组行内对齐时的字 */
-.block-container .row-widget.stButton button { font-size: 12.5px !important; }
-</style>
-""", unsafe_allow_html=True)
-
-
-# —— 压缩顶部与分割线间距 —— #
-st.markdown("""
-<style>
-/* 主区贴顶，不要再把它改回非 0 */
-.main .block-container { padding-top: 0 !important; margin-top: 0 !important; }
-/* 第一块组件也不留空 */
-.main .block-container > div:first-child{ margin-top:0!important; padding-top:0!important; }
-/* 侧边栏可以留很小的顶距，不影响主区 */
-section[data-testid="stSidebar"] > div { padding-top: 0.2rem !important; }
-/* 分割线更紧凑 */
-hr { margin: 0.2rem 0 !important; }
-</style>
-""", unsafe_allow_html=True)
-
-
-
-st.markdown("""
-<style>
-/* 让下载按钮更显眼：蓝底白字 + 轻微阴影 */
-.stDownloadButton > button {
-  background-color: #2563eb !important;   /* 蓝色 */
-  color: #ffffff !important;               /* 白字 */
-  border: 1px solid #1d4ed8 !important;
-  box-shadow: 0 2px 6px rgba(37,99,235,.25) !important;
-  border-radius: 8px !important;
-}
-.stDownloadButton > button:hover {
-  background-color: #1e40af !important;   /* 深一点的蓝（悬停） */
-  border-color: #1e3a8a !important;
-}
-.stDownloadButton > button:active {
-  background-color: #1d4ed8 !important;   /* 点击态 */
-  transform: translateY(0.5px);
-}
-</style>
-""", unsafe_allow_html=True)
-
-
-
-
-# ===================== ① 固定文件夹持久化（读取/保存） =====================
+# ======================
+# 数据目录（固定文件夹）
+# ======================
 DEFAULT_WIN = r"C:\Users\jeffy\chris\tech map"
 DATA_DIR_DEFAULT = DEFAULT_WIN if os.path.exists(DEFAULT_WIN) else os.path.join(os.getcwd(), "data")
 os.makedirs(DATA_DIR_DEFAULT, exist_ok=True)
 SUPPORT_EXTS = (".csv", ".xlsx", ".xls")
 
-# 用 session_state 记住当前数据目录（方便把数据源 UI 放到底部）
 if "data_dir_path" not in st.session_state:
     st.session_state.data_dir_path = DATA_DIR_DEFAULT
 data_dir = st.session_state.data_dir_path
 os.makedirs(data_dir, exist_ok=True)
 
-def list_data_files():
+def _list_files():
     try:
         files = [f for f in os.listdir(data_dir) if f.lower().endswith(SUPPORT_EXTS)]
-        files = sorted(files, key=lambda f: os.path.getmtime(os.path.join(data_dir, f)), reverse=True)
-        return files
+        return sorted(files, key=lambda f: os.path.getmtime(os.path.join(data_dir, f)), reverse=True)
     except Exception:
         return []
 
-def load_df_from_path(path: str) -> pd.DataFrame:
-    name = path.lower()
-    if name.endswith(".csv"):
+def _load_df(path: str) -> pd.DataFrame:
+    if path.lower().endswith(".csv"):
         try:
             return pd.read_csv(path)
         except UnicodeDecodeError:
             return pd.read_csv(path, encoding="latin-1")
-    else:
-        return pd.read_excel(path)
+    return pd.read_excel(path)
 
-def save_uploaded_to_folder(uploaded, folder: str) -> str:
+def _save_uploaded(uploaded, folder: str) -> str:
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     base, ext = os.path.splitext(uploaded.name)
-    fname = f"{base}_{ts}{ext}"
-    fpath = os.path.join(folder, fname)
+    fpath = os.path.join(folder, f"{base}_{ts}{ext}")
     with open(fpath, "wb") as f:
         f.write(uploaded.read())
     return fpath
 
-# session_state 初始化
+# ======================
+# Session 初始化
+# ======================
 if "df" not in st.session_state:
     st.session_state.df = None
 if "data_meta" not in st.session_state:
     st.session_state.data_meta = {}
 
-# 启动时若无 df，则尝试从文件夹加载最近文件
-files = list_data_files()
-if st.session_state.df is None and files:
-    latest_path = os.path.join(data_dir, files[0])
+
+
+
+# 启动时自动加载最近文件
+_files = _list_files()
+if st.session_state.df is None and _files:
+    latest_path = os.path.join(data_dir, _files[0])
     try:
-        st.session_state.df = load_df_from_path(latest_path)
+        st.session_state.df = _load_df(latest_path)
         st.session_state.data_meta = {
-            "filename": files[0],
+            "filename": _files[0],
             "path": latest_path,
             "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
-        # st.info(f"已从文件夹加载最近文件：**{files[0]}**")  ← 把这一行注释掉或删除
     except Exception as e:
-        st.error(f"读取 {files[0]} 失败：{e}")
+        st.error(f"读取 {_files[0]} 失败：{e}")
 
-# === 统一使用 df（判空） ===
-df = st.session_state.get('df')
+df = st.session_state.get("df")
 if df is None:
-    st.warning("尚未加载任何数据。请先在页面底部【数据源】处选择或上传一个文件。")
+    st.warning("尚未加载任何数据。请到侧边栏最底部【📁 数据源（固定文件夹）】选择或上传文件。")
     st.stop()
 
-# ===================== 【新增】缓存工具（ZIP全量 / 城市郡主表 / 州边界） =====================
+# ======================
+# 缓存 / 参考表
+# ======================
 @st.cache_data(show_spinner=False)
 def load_zip_all_cached():
     import pgeocode
-    nomi_local = pgeocode.Nominatim('us')
+    nomi_local = pgeocode.Nominatim("us")
     z = nomi_local._data[['postal_code','latitude','longitude','state_code','place_name','county_name']].dropna(subset=['latitude','longitude']).copy()
     z['postal_code'] = z['postal_code'].astype(str).str.zfill(5)
     return z
@@ -250,14 +250,13 @@ def load_us_states_geojson_cached(geojson_path):
         json.dump(data, f)
     return data
 
-# ===================== ② 数据清洗 + ZIP/State/City/County 回填 + 官方主表 =====================
-# 规范列名
+# ======================
+# 数据清洗/回填
+# ======================
 df.columns = [str(c).strip() for c in df.columns]
-
-# ---------- 自动识别经纬度列（别名 + ZIP/Address 兜底） ----------
 alias_map = {}
 for c in list(df.columns):
-    lc = c.strip().lower()
+    lc = c.lower()
     if lc in {"lat","latitude","纬度","y","y_coord","ycoordinate","lat_dd","latitudes","lattitude"}:
         alias_map[c] = "Latitude"
     if lc in {"lon","lng","long","longitude","经度","x","x_coord","xcoordinate","lon_dd","longitudes","longtitude"}:
@@ -265,21 +264,19 @@ for c in list(df.columns):
 if alias_map:
     df.rename(columns=alias_map, inplace=True)
 
-lat_candidates = ['Latitude', 'Lat', 'latitude', 'lat']
-lon_candidates = ['Longitude', 'Lon', 'Lng', 'longitude', 'lon', 'lng']
-def pick_col(cands):
-    for c in cands:
+def _pick_col(cols):
+    for c in cols:
         if c in df.columns:
             return c
     return None
-lat_col = pick_col(lat_candidates)
-lon_col = pick_col(lon_candidates)
+lat_col = _pick_col(['Latitude', 'Lat', 'latitude', 'lat'])
+lon_col = _pick_col(['Longitude', 'Lon', 'Lng', 'longitude', 'lon', 'lng'])
 
 def _extract_zip_from_text(s):
     m = re.search(r'\b(\d{5})(?:-\d{4})?\b', str(s))
     return m.group(1) if m else np.nan
 
-# 若仍未找到，经由 ZIP/Address 回填经纬度
+# ZIP 回填经纬度（若没提供经纬度）
 if not lat_col or not lon_col:
     zip_candidates = ['ZIP','Zip','zip','ZipCode','ZIP Code','PostalCode','Postal Code','postcode','Postcode','邮编']
     zip_col0 = next((c for c in zip_candidates if c in df.columns), None)
@@ -295,13 +292,15 @@ if not lat_col or not lon_col:
         import pgeocode
         nomi_tmp = pgeocode.Nominatim('us')
         zlist = df['ZIP5'].dropna().unique().tolist()
-        if len(zlist) > 0:
+        if zlist:
             ref = nomi_tmp.query_postal_code(zlist)[['postal_code','latitude','longitude']].dropna()
             ref['postal_code'] = ref['postal_code'].astype(str).str.zfill(5)
             df = df.merge(ref, left_on='ZIP5', right_on='postal_code', how='left')
             def _to_num(x):
-                try: return float(str(x).strip().replace(',', '.'))
-                except: return np.nan
+                try:
+                    return float(str(x).strip().replace(',', '.'))
+                except:
+                    return np.nan
             df['Latitude']  = pd.to_numeric(df.get('Latitude'), errors='coerce')
             df['Longitude'] = pd.to_numeric(df.get('Longitude'), errors='coerce')
             df['Latitude']  = df['Latitude'].where(df['Latitude'].notna(),  df['latitude'].map(_to_num))
@@ -312,7 +311,7 @@ if not lat_col or not lon_col:
         st.warning(f"基于 ZIP 回填经纬度失败：{e}")
 
 if not lat_col or not lon_col:
-    st.error(f"未找到经纬度列，请确认列名包含 {['Latitude','Lat','latitude','lat']} / {['Longitude','Lon','Lng','longitude','lon','lng']}，或提供 Address/ZIP 以便自动推算。当前列：{list(df.columns)}")
+    st.error(f"未找到经纬度列，请确认列名包含 {['Latitude','Lat','latitude','lat']} / {['Longitude','Lon','Lng','longitude','lon','lng']}，或提供 Address/ZIP。当前列：{list(df.columns)}")
     st.stop()
 
 def clean_num(x):
@@ -325,49 +324,40 @@ def clean_num(x):
 df['Latitude']  = df[lat_col].apply(clean_num)
 df['Longitude'] = df[lon_col].apply(clean_num)
 
-# Level 容错到 1-6
 if 'Level' not in df.columns:
     st.error("缺少必要列：Level")
     st.stop()
+
 def to_level(x):
     if pd.isna(x): return np.nan
     m = re.search(r'(\d+)', str(x))
-    if m:
-        v = int(m.group(1))
-        return v if 1 <= v <= 6 else np.nan
-    return np.nan
+    if not m:
+        return np.nan
+    v = int(m.group(1))
+    return v if 1 <= v <= 7 else np.nan  # 允许 1-7（7 = 网上新增）
 df['Level'] = df['Level'].apply(to_level)
 
-# Name/Address 基础校验
 for need in ['Name', 'Address']:
     if need not in df.columns:
         st.error(f"缺少必要列：{need}")
         st.stop()
 
-# —— 解析 ZIP 源列（没有就从 Address 中提取） —— #
-zip_candidates = ['ZIP', 'Zip', 'zip', 'ZipCode', 'ZIP Code', 'PostalCode', 'Postal Code', 'postcode', 'Postcode', '邮编']
+zip_candidates = ['ZIP','Zip','zip','ZipCode','ZIP Code','PostalCode','Postal Code','postcode','Postcode','邮编']
 zip_col = next((c for c in zip_candidates if c in df.columns), None)
-def extract_zip_from_text(s):
-    m = re.search(r'\b(\d{5})(?:-\d{4})?\b', str(s))
-    return m.group(1) if m else np.nan
-
 if zip_col is not None:
     df['ZIP'] = df[zip_col]
 else:
-    df['ZIP'] = df['Address'].apply(extract_zip_from_text)
-
-df['ZIP']  = df['ZIP'].apply(lambda x: extract_zip_from_text(x)).astype('string')
+    df['ZIP'] = df['Address'].apply(_extract_zip_from_text)
+df['ZIP']  = df['ZIP'].apply(lambda x: _extract_zip_from_text(x)).astype('string')
 df['ZIP5'] = df['ZIP'].str.zfill(5)
 
-# —— pgeocode：回填点位 State/City/County + 官方“城市/郡”主表 —— #
 try:
     import pgeocode
 except ImportError:
     st.error("缺少 pgeocode：请先执行  python -m pip install pgeocode")
     st.stop()
-nomi = pgeocode.Nominatim('us')
 
-# A) 把 df 的 ZIP5 回填
+nomi = pgeocode.Nominatim('us')
 zip_list = df['ZIP5'].dropna().unique().tolist()
 zip_ref = nomi.query_postal_code(zip_list)
 zip_ref = zip_ref[['postal_code','latitude','longitude','state_code','place_name','county_name']].dropna(subset=['latitude','longitude'])
@@ -379,179 +369,120 @@ def combine_first_series(a, b):
     b = pd.Series(b)
     return a.where(a.notna(), b)
 
-if 'State' not in df.columns:  df['State']  = pd.NA
-if 'City'  not in df.columns:  df['City']   = pd.NA
-if 'County'not in df.columns:  df['County'] = pd.NA
+if 'State'  not in df.columns: df['State']  = pd.NA
+if 'City'   not in df.columns: df['City']   = pd.NA
+if 'County' not in df.columns: df['County'] = pd.NA
 
 df['Latitude']  = combine_first_series(df['latitude'],   df['Latitude']).astype(float)
 df['Longitude'] = combine_first_series(df['longitude'],  df['Longitude']).astype(float)
 df['State']     = combine_first_series(df['state_code'], df['State']).astype('string')
 df['City']      = combine_first_series(df['place_name'], df['City']).astype('string')
 df['County']    = combine_first_series(df['county_name'],df['County']).astype('string')
-
 df.drop(columns=['postal_code','latitude','longitude','state_code','place_name','county_name'], inplace=True, errors='ignore')
 
-# B) 官方主表
 zip_all = load_zip_all_cached()
 cities_master, counties_master = build_city_county_master(zip_all)
 
-# ===================== ③ 侧边栏筛选：郡 / 城市 二选一（默认郡） =====================
-st.sidebar.markdown("---")
-geo_level = st.sidebar.selectbox("显示范围", ["郡（County）", "城市（City）"], index=0)
+# ======================
+# 侧边栏筛选
+# ======================
+with st.sidebar:
+    geo_level = st.selectbox("显示范围", ["郡（County）", "城市（City）"], index=0)
 
-# 等级筛选
-levels_present = sorted([int(x) for x in df['Level'].dropna().unique().tolist()]) or [1,2,3,4,5,6]
-level_choice = st.sidebar.selectbox('选择等级', ['全部'] + levels_present, index=0)
+    levels_present = sorted([int(x) for x in df['Level'].dropna().unique().tolist()]) or [1,2,3,4,5,6,7]
+    level_choice = st.selectbox('选择等级', ['全部'] + levels_present, index=0)
 
-# 州、郡/市
-states_for_level = sorted((counties_master if geo_level.startswith("郡") else cities_master)['State'].unique().tolist())
-state_choice = st.sidebar.selectbox('选择州 (State)', ['全部'] + states_for_level)
+    states_for_level = sorted((counties_master if geo_level.startswith("郡") else cities_master)['State'].unique().tolist())
+    state_choice = st.selectbox('选择州 (State)', ['全部'] + states_for_level)
 
-if geo_level.startswith("郡"):
-    units = sorted(counties_master.loc[counties_master['State']==state_choice, 'County'].unique().tolist()) if state_choice!='全部' \
-            else sorted(counties_master['County'].unique().tolist())[:5000]
-    unit_label = "选择郡 (County)"
-else:
-    units = sorted(cities_master.loc[cities_master['State']==state_choice, 'City'].unique().tolist()) if state_choice!='全部' \
-            else sorted(cities_master['City'].unique().tolist())[:5000]
-    unit_label = "选择城市 (City)"
-unit_choice = st.sidebar.selectbox(unit_label, ['全部'] + units)
+    if geo_level.startswith("郡"):
+        units = sorted(counties_master.loc[counties_master['State']==state_choice, 'County'].unique().tolist()) if state_choice!='全部' \
+                else sorted(counties_master['County'].unique().tolist())[:5000]
+        unit_label = "选择郡 (County)"
+    else:
+        units = sorted(cities_master.loc[cities_master['State']==state_choice, 'City'].unique().tolist()) if state_choice!='全部' \
+                else sorted(cities_master['City'].unique().tolist())[:5000]
+        unit_label = "选择城市 (City)"
+    unit_choice = st.selectbox(unit_label, ['全部'] + units)
 
-# 读取性能参数（若 session 里没有就给默认）
-use_cluster   = st.session_state.get("perf_use_cluster", True)
-prefer_canvas = st.session_state.get("perf_prefer_canvas", True)
-max_units     = st.session_state.get("perf_max_units", 1500)
+    # “好维修工”与半径阈值
+    st.subheader("优选规则")
+    good_levels   = st.sidebar.multiselect("维修工等级", [1,2,3,4,5,6,7], default=[1,2,3,4,5,6])
+    radius_miles  = st.slider("半径（英里）", 5, 50, 20, 5)
+    min_good      = st.number_input("圈内≥ 好维修工数量", 1, 10, 2, 1)
+    only_show_units       = st.checkbox("只显示达标范围", value=True)
+    only_show_good_points = st.checkbox("只显示维修工点位", value=False)
 
+    st.markdown("---")
 
-# 维修工点位基础筛选
+    # 网上补充相关的筛选（数据源选择 + 过滤）
+    source_mode = st.radio("网上补充数据源", ["自动（Google优先）", "只用Google（更快）", "只用OSM（备用，较慢）"], index=0)
+    if "hvac_only" not in st.session_state:
+        st.session_state.hvac_only = False
+    hvac_only = st.checkbox("只看制冷/制热（HVAC）公司", value=st.session_state.hvac_only, key="hvac_only")
+    show_only_new = st.checkbox("只看网上新增（Level = 7）", value=False)
+
+    st.markdown("---")
+
+    # 性能设置（放底部）
+    use_cluster   = st.session_state.get("perf_use_cluster", True)
+    prefer_canvas = st.session_state.get("perf_prefer_canvas", True)
+    max_units     = st.session_state.get("perf_max_units", 1500)
+    with st.expander("⚡ 性能设置", expanded=False):
+        st.checkbox("点位聚合（多点更快）", key="perf_use_cluster", value=use_cluster)
+        st.checkbox("Canvas 渲染矢量", key="perf_prefer_canvas", value=prefer_canvas)
+        st.slider("最多渲染范围数（郡/城市圈）", 200, 5000, int(max_units), 100, key="perf_max_units")
+    use_cluster   = st.session_state.get("perf_use_cluster", True)
+    prefer_canvas = st.session_state.get("perf_prefer_canvas", True)
+    max_units     = st.session_state.get("perf_max_units", 1500)
+
+# 顶部搜索（压缩间距）
+sc1, sc2 = st.columns([0.5, 0.5])
+with sc1:
+    q_name = st.text_input("维修工名称", key="q_name", placeholder="例如：ACME Tech", autocomplete="off")
+with sc2:
+    q_addr = st.text_input("地址关键词", key="q_addr", placeholder="城市、州、街道或ZIP", autocomplete="off")
+
+# ======================
+# 过滤（基础 + HVAC）
+# ======================
+def _s(val):
+    try:
+        if val is None: return ""
+        if isinstance(val, float) and np.isnan(val): return ""
+        import pandas as pd
+        if pd.isna(val): return ""
+    except Exception:
+        pass
+    return str(val)
+
 mask = pd.Series(True, index=df.index)
-if level_choice != '全部': mask &= (df['Level'] == level_choice)
-if state_choice != '全部': mask &= (df['State'] == state_choice)
+if level_choice != '全部':
+    mask &= (df['Level'] == level_choice)
+if state_choice != '全部':
+    mask &= (df['State'] == state_choice)
 if geo_level.startswith("郡") and unit_choice != '全部':
     mask &= (df['County'] == unit_choice)
 if (not geo_level.startswith("郡")) and unit_choice != '全部':
     mask &= (df['City'] == unit_choice)
+
 filtered = df.loc[mask].copy()
 
-# ==== 顶置搜索（移到更靠上） ====
-sc1, sc2 = st.columns([0.5, 0.5])
-with sc1:
-    q_name = st.text_input(
-        "维修工名称",
-        key="q_name",
-        placeholder="例如：ACME Tech",
-        autocomplete="off",      # 不出现下拉联想
-        label_visibility="visible",
+if hvac_only:
+    text = (
+        filtered.get('Name',    pd.Series('', index=filtered.index)).astype('string').fillna('') + ' ' +
+        filtered.get('Address', pd.Series('', index=filtered.index)).astype('string').fillna('') + ' ' +
+        filtered.get('City',    pd.Series('', index=filtered.index)).astype('string').fillna('') + ' ' +
+        filtered.get('County',  pd.Series('', index=filtered.index)).astype('string').fillna('')
     )
-with sc2:
-    q_addr = st.text_input(
-        "地址关键词",
-        key="q_addr",
-        placeholder="城市、州、街道或ZIP",
-        autocomplete="off",      # 不出现下拉联想
-        label_visibility="visible",
-    )
+    filtered = filtered[
+        text.str.contains(HVAC_PAT_STR,  case=False, na=False, regex=True) &
+       ~text.str.contains(BLACK_PAT_STR, case=False, na=False, regex=True)
+    ]
 
-# —— 优选规则 —— #
-st.sidebar.subheader("优选规则")
-good_levels = st.sidebar.multiselect("等级筛选", [1,2,3,4,5,6], default=[1,2])
-radius_miles = st.sidebar.slider("半径（英里）", 5, 50, 20, 5)
-min_good = st.sidebar.number_input("圈内≥ 好维修工数量", 1, 10, 2, 1)
-only_show_units = st.sidebar.checkbox("只显示达标范围", value=True)
-only_show_good_points = st.sidebar.checkbox("只显示“好”的维修工点位", value=False)
-
-# ====== 把“数据源”UI 移到侧边栏最底部 ======
-with st.sidebar.expander("📁 数据源（固定文件夹）", expanded=False):
-    # 显示并允许修改数据目录
-    new_dir = st.text_input(
-        "数据文件夹路径",
-        value=st.session_state.data_dir_path,
-        help="可填本地或共享盘路径，例如 D:\\data 或 \\\\SERVER\\share"
-    )
-
-
-    if new_dir != st.session_state.data_dir_path:
-        st.session_state.data_dir_path = new_dir
-    os.makedirs(st.session_state.data_dir_path, exist_ok=True)
-
-    files2 = [f for f in os.listdir(st.session_state.data_dir_path) if f.lower().endswith(SUPPORT_EXTS)]
-    files2 = sorted(files2, key=lambda f: os.path.getmtime(os.path.join(st.session_state.data_dir_path, f)), reverse=True)
-
-    if files2:
-        pick = st.selectbox("选择已保存的数据文件", files2, index=0, key="pick_file_bottom")
-        if st.button("载入所选文件", key="btn_load_selected_bottom"):
-            try:
-                path = os.path.join(st.session_state.data_dir_path, pick)
-                st.session_state.df = load_df_from_path(path)
-                st.session_state.data_meta = {
-                    "filename": pick,
-                    "path": path,
-                    "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                }
-                st.success(f"已载入：{pick}")
-                st.experimental_rerun()
-            except Exception as e:
-                st.error(f"载入失败：{e}")
-    else:
-        st.info("当前文件夹没有任何数据文件（csv/xlsx/xls）。")
-
-    new_file = st.file_uploader("上传新数据（保存进文件夹）", type=['csv', 'xlsx', 'xls'], key="uploader_new_bottom")
-    if new_file is not None:
-        try:
-            saved_path = save_uploaded_to_folder(new_file, st.session_state.data_dir_path)
-            st.session_state.df = load_df_from_path(saved_path)
-            st.session_state.data_meta = {
-                "filename": os.path.basename(saved_path),
-                "path": saved_path,
-                "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            st.success(f"已上传并载入：{os.path.basename(saved_path)}")
-            st.experimental_rerun()
-        except Exception as e:
-            st.error(f"上传/读取失败：{e}")
-
-    if st.session_state.get("df") is not None:
-        meta = st.session_state.get("data_meta", {})
-        st.caption("当前数据：")
-        st.success(
-            f"**{meta.get('filename','(未命名)')}**\n\n"
-            f"路径：{meta.get('path','')}\n\n"
-            f"载入时间：{meta.get('loaded_at','')}\n\n"
-            f"行数：{len(st.session_state.df)}"
-        )
-
-# === 侧边栏最底部：⚡ 性能设置 ===
-with st.sidebar.expander("⚡ 性能设置", expanded=False):
-    st.checkbox("点位聚合（多点更快）", key="perf_use_cluster",
-                value=st.session_state.get("perf_use_cluster", use_cluster))
-    st.checkbox("Canvas 渲染矢量", key="perf_prefer_canvas",
-                value=st.session_state.get("perf_prefer_canvas", prefer_canvas))
-    st.slider("最多渲染范围数（郡/城市圈）", 200, 5000, int(max_units), 100, key="perf_max_units")
-
-# ===================== 进一步筛选：名称/地址搜索（替代 郡→ZIP 列表） =====================
-if SHOW_INLINE_SEARCH:
-    st.markdown("### 🔍 维修工搜索（名称 / 地址 / 城市 / 郡 / ZIP）")
-    name_kw = st.text_input("名称关键词", value="", key="kw_name")
-    addr_kw = st.text_input("地址/城市/郡/ZIP 关键词", value="", key="kw_addr")
-
-    # 将搜索与之前的筛选叠加（真正影响地图与“按当前筛选”的统计）
-    if name_kw.strip():
-        filtered = filtered[filtered['Name'].astype('string').str.contains(name_kw, case=False, na=False)]
-    if addr_kw.strip():
-        combo = (
-            filtered.get('Address', '').astype('string').fillna('') + ' ' +
-            filtered.get('City', '').astype('string').fillna('') + ' ' +
-            filtered.get('County', '').astype('string').fillna('') + ' ' +
-            filtered.get('ZIP', '').astype('string').fillna('') + ' ' +
-            filtered.get('State', '').astype('string').fillna('')
-        )
-        filtered = filtered[combo.str.contains(addr_kw, case=False, na=False)]
-
-    st.caption(f"匹配到 {len(filtered):,} 条。下面预览前 200 条：")
-    preview_cols = [c for c in ['Name','Level','State','City','County','ZIP','Address','Latitude','Longitude'] if c in filtered.columns]
-    st.dataframe(filtered[preview_cols].head(200), use_container_width=True)
-
-# ===================== 统计圈与点位构建 =====================
+# ======================
+# 统计圈 & 点位
+# ======================
 if geo_level.startswith("郡"):
     base_master = counties_master if state_choice=='全部' else counties_master[counties_master['State']==state_choice]
     name_col = 'County'
@@ -567,7 +498,6 @@ base_master = base_master.copy()
 points_all  = df.dropna(subset=['Latitude','Longitude']).copy()
 points_good = points_all[points_all['Level'].isin(good_levels)]
 
-# BallTree 统计
 R_EARTH_MI = 3958.7613
 def counts_balltree(centroids_df, pts_df, radius_mi):
     try:
@@ -592,7 +522,7 @@ def counts_balltree(centroids_df, pts_df, radius_mi):
             dlmb = lonp - clng
             a = np.sin(dphi/2)**2 + np.cos(clat)*np.cos(latp)*np.sin(dlmb/2)**2
             dist = 2*R_EARTH_MI*np.arcsin(np.sqrt(a))
-            out[i:i+batch] = (dist <= radius_miles).sum(axis=1)
+            out[i:i+batch] = (dist <= radius_mi).sum(axis=1)
         return out
 
 use_sklearn = True
@@ -623,16 +553,16 @@ centroids_to_plot = (centroids_to_plot
                      .head(max_units)
                      .copy())
 
-
-# 作为底图展示的点位集合（受左侧筛选影响）
+# 底图点位（应用“只看新增/只看好维修工”）
 points = filtered.dropna(subset=['Latitude','Longitude']).copy()
+if show_only_new:
+    points = points[points['Level'].eq(7)]
 if only_show_good_points:
     points = points[points['Level'].isin(good_levels)]
 
-# 生成“命中集合”，用于放大与加🚩，但不影响 points 的显示
+# 顶部命中集合（用于 🚩）
 def _contains_safe(s, q):
     return s.astype(str).str.contains(re.escape(q), case=False, na=False)
-
 matched = points.copy()
 has_query = False
 if q_name:
@@ -644,52 +574,23 @@ if q_addr:
         _contains_safe(points['Address'], q_addr) |
         _contains_safe(points.get('City',   pd.Series("", index=points.index)),   q_addr) |
         _contains_safe(points.get('County', pd.Series("", index=points.index)),   q_addr) |
-        _contains_safe(points.get('ZIP',    pd.Series("", index=points.index)),    q_addr) |
-        _contains_safe(points.get('State',  pd.Series("", index=points.index)),  q_addr)
+        _contains_safe(points.get('ZIP',    pd.Series("", index=points.index)),   q_addr) |
+        _contains_safe(points.get('State',  pd.Series("", index=points.index)),   q_addr)
     )
     matched = matched[addr_mask]
-
-# 标记：是否有有效搜索命中
 search_active = bool(has_query) and (len(matched) > 0)
 
-n_points = len(points)
-
-# ===================== ④ 地图绘制 =====================
+# ======================
+# 地图绘制
+# ======================
 US_STATES_GEO_PATH = os.path.join(data_dir, "us_states.geojson")
-def load_us_states_geojson():
-    if os.path.exists(US_STATES_GEO_PATH):
-        with open(US_STATES_GEO_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    url = "https://raw.githubusercontent.com/python-visualization/folium/master/examples/data/us-states.json"
-    try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        with open(US_STATES_GEO_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        return data
-    except Exception as e:
-        st.warning(f"州界数据下载失败：{e}")
-        return None
-
-level_color = {
-    1:'#2ecc71', 2:'#FFD700', 3:'#FF4D4F', 4:'#FFC0CB', 5:'#8A2BE2', 6:'#000000'
-}
-
-default_center = [39.5, -98.35]
-if n_points:
-    center = [points['Latitude'].mean(), points['Longitude'].mean()]
-elif not centroids_to_plot.empty:
-    center = [centroids_to_plot['cLat'].iloc[0], centroids_to_plot['cLng'].iloc[0]]
-else:
-    center = default_center
+level_color = {1:'#2ecc71',2:'#FFD700',3:'#FF4D4F',4:'#FFC0CB',5:'#8A2BE2',6:'#000000',7:'#1E90FF'}
 
 m = folium.Map(location=[37.8, -96.0], zoom_start=4, keyboard=False,
                prefer_canvas=prefer_canvas, tiles="CartoDB positron")
-
 m.get_root().header.add_child(folium.Element("""
 <style>
-.leaflet-container:focus,
-.leaflet-container:focus-visible { outline: none !important; }
+.leaflet-container:focus, .leaflet-container:focus-visible { outline: none !important; }
 .leaflet-interactive:focus { outline: none !important; }
 </style>
 """))
@@ -699,18 +600,10 @@ selected_bounds = None
 if states_geo:
     feats = states_geo['features']
     states_fc = {'type': 'FeatureCollection', 'features': feats}
-
     def style_fn(feat):
         code = feat.get('id') or feat.get('properties', {}).get('state_code')
         is_selected = (state_choice != '全部' and code == state_choice)
-        return {
-            'fillColor':   '#ffffff',
-            'fillOpacity': 0.0,
-            'color':       '#2563eb',
-            'weight':      3.0 if is_selected else 1.8,
-            'dashArray':   None
-        }
-
+        return {'fillColor':'#ffffff','fillOpacity':0.0,'color':'#2563eb','weight':3.0 if is_selected else 1.8,'dashArray':None}
     gj = folium.GeoJson(
         data=states_fc, name="US States",
         style_function=style_fn, highlight_function=None,
@@ -718,8 +611,7 @@ if states_geo:
     ).add_to(m)
 
     if state_choice != '全部':
-        target = next((f for f in feats
-                       if (f.get('id') or f.get('properties', {}).get('state_code')) == state_choice), None)
+        target = next((f for f in feats if (f.get('id') or f.get('properties', {}).get('state_code')) == state_choice), None)
         if target:
             def iter_coords(geom):
                 if geom['type'] == 'Polygon':
@@ -736,7 +628,7 @@ if states_geo:
     else:
         selected_bounds = gj.get_bounds()
 
-# —— 郡/城市圈 —— #
+# 郡/城市圈
 radius_m = radius_miles * 1609.34
 unit_fg = folium.FeatureGroup(name=layer_name, show=True).add_to(m)
 
@@ -754,14 +646,11 @@ for _, r in centroids_to_plot.iterrows():
            f"({r.get('State')}) | 好工: {int(r['good_in_radius'])} / 总: {int(r['all_in_radius'])}")
     if geo_level.startswith("郡") and 'ZIP_count' in r and 'ZIPs' in r:
         tip += f" | ZIP数: {int(r['ZIP_count'])} | 示例: {preview_zip(r['ZIPs'])}"
-    folium.Circle(
-        location=[r['cLat'], r['cLng']], radius=radius_m,
-        color=ring_color, weight=1.6, fill=True, fill_opacity=0.05,
-        tooltip=tip
-    ).add_to(unit_fg)
+    folium.Circle(location=[r['cLat'], r['cLng']], radius=radius_m,
+                  color=ring_color, weight=1.6, fill=True, fill_opacity=0.05,
+                  tooltip=tip).add_to(unit_fg)
 
-# —— 维修工点位 —— #
-from folium.plugins import MarkerCluster
+# 点位层
 workers_fg = folium.FeatureGroup(name="维修工点位", show=True).add_to(m)
 
 if use_cluster and len(points) > 2000:
@@ -779,18 +668,14 @@ if use_cluster and len(points) > 2000:
             }}
             """
         ).add_to(workers_fg)
-
     for _, row in points.iterrows():
         lvl = int(row['Level']) if not pd.isna(row['Level']) else None
         color = level_color.get(lvl, '#3388ff')
         folium.CircleMarker(
             location=[row['Latitude'], row['Longitude']],
             radius=5, color=color, fill=True, fill_color=color, fill_opacity=0.9,
-            popup=(f"名称:{row.get('Name','')}<br>"
-                   f"等级:{row.get('Level','')}<br>"
-                   f"州(State):{row.get('State','')}<br>"
-                   f"市/郡:{row.get('City','')}/{row.get('County','')}<br>"
-                   f"ZIP:{row.get('ZIP','')}")
+            popup=(f"名称:{row.get('Name','')}<br>等级:{row.get('Level','')}<br>"
+                   f"州(State):{row.get('State','')}<br>市/郡:{row.get('City','')}/{row.get('County','')}<br>ZIP:{row.get('ZIP','')}")
         ).add_to(clusters.get(lvl, workers_fg))
 else:
     for _, row in points.iterrows():
@@ -799,114 +684,49 @@ else:
         folium.CircleMarker(
             location=[row['Latitude'], row['Longitude']],
             radius=6, color=color, fill=True, fill_color=color, fill_opacity=0.9,
-            popup=(f"名称:{row.get('Name','')}<br>"
-                   f"等级:{row.get('Level','')}<br>"
-                   f"州(State):{row.get('State','')}<br>"
-                   f"市/郡:{row.get('City','')}/{row.get('County','')}<br>"
-                   f"ZIP:{row.get('ZIP','')}")
+            popup=(f"名称:{row.get('Name','')}<br>等级:{row.get('Level','')}<br>"
+                   f"州(State):{row.get('State','')}<br>市/郡:{row.get('City','')}/{row.get('County','')}<br>ZIP:{row.get('ZIP','')}")
         ).add_to(workers_fg)
 
-        # 图层开关（放左上，避免被右上角图例挡住）
-folium.LayerControl(collapsed=True, position='topleft').add_to(m)
-
-      # —— 大号红旗（锚点对齐版）——
-def big_flag_icon(size_px: int = 42, anchor_y_factor: float = 0.92) -> folium.DivIcon:
-    anchor_y = int(size_px * anchor_y_factor)   # 0.88~0.96 之间微调
-    return folium.DivIcon(
-        html=f'''
-        <div style="filter: drop-shadow(0 0 1px #fff) drop-shadow(0 0 6px rgba(0,0,0,.35));">
-          <span style="font-size:{size_px}px; line-height:1;">🚩</span>
-        </div>
-        ''',
-        icon_size=(size_px, size_px),
-        icon_anchor=(size_px // 2, anchor_y)  # 底部中点 ≈ 旗尖
-    )
-
-# 在你完成所有点位（workers_fg / clusters）之后，加这一段：
-if 'search_active' in locals() and search_active and 'matched' in locals() and len(matched) > 0:
+# 搜索命中：红旗
+if search_active and len(matched) > 0:
     for _, r in matched.iterrows():
         folium.Marker(
             location=[float(r['Latitude']), float(r['Longitude'])],
-            icon=big_flag_icon(size_px=42),         # ← 想更大就调这个值，如 48/56
+            icon=big_flag_icon(size_px=42),
             tooltip=f"🔎 命中：{r.get('Name','')}",
-            popup=(f"<b>名称：</b>{r.get('Name','')}<br>"
-                   f"<b>地址：</b>{r.get('Address','')}<br>"
-                   f"<b>等级：</b>{r.get('Level','')}"),
-            z_index_offset=10000                    # 永远盖在最上层
+            popup=(f"<b>名称：</b>{r.get('Name','')}<br><b>地址：</b>{r.get('Address','')}<br><b>等级：</b>{r.get('Level','')}"),
+            z_index_offset=10000
         ).add_to(m)
 
-
-# —— 自动缩放 —— #
-def fit_to_union_bounds(map_obj, state_bnds, pts_df, cents_df):
-    has_pts = len(pts_df) > 0
-    has_c   = len(cents_df) > 0
-    if not state_bnds and not has_pts and not has_c:
-        return
-    b = None
-    if state_bnds:
-        b = [[state_bnds[0][0], state_bnds[0][1]], [state_bnds[1][0], state_bnds[1][1]]]
-    if has_pts:
-        pb = [[pts_df['Latitude'].min(), pts_df['Longitude'].min()],
-              [pts_df['Latitude'].max(), pts_df['Longitude'].max()]]
-        b = pb if b is None else [[min(b[0][0], pb[0][0]), min(b[0][1], pb[0][1])],
-                                  [max(b[1][0], pb[1][0]), max(b[1][1], pb[1][1])]]
-    if has_c:
-        cb = [[cents_df['cLat'].min(), cents_df['cLng'].min()],
-              [cents_df['cLat'].max(), cents_df['cLng'].max()]]
-        b = cb if b is None else [[min(b[0][0], cb[0][0]), min(b[0][1], cb[0][1])],
-                                  [max(b[1][0], cb[1][0]), max(b[1][1], cb[1][1])]]
-    if b:
-        map_obj.fit_bounds(b)
-
-# —— 智能缩放 —— #
-# 固定全美（CONUS）外接矩形：下边界 24.5°N，上边界 49.5°N；西界 -125°E，东界 -66.9°E
+# 初始/智能缩放
 CONUS_BOUNDS = [[24.5, -125.0], [49.5, -66.9]]
-
 def fit_initial_or_search(map_obj, nat_bnds, state_bnds, matched_df, search_active):
-    # 1) 若有搜索命中：缩放到命中的维修工（多条则包络，单条给一点 buffer）
     if search_active and matched_df is not None and len(matched_df) > 0:
         if len(matched_df) == 1:
-            lat = float(matched_df['Latitude'].iloc[0])
-            lng = float(matched_df['Longitude'].iloc[0])
-            pad = 0.35
-            b = [[lat - pad, lng - pad], [lat + pad, lng + pad]]
+            lat = float(matched_df['Latitude'].iloc[0]); lng = float(matched_df['Longitude'].iloc[0])
+            pad = 0.35; b = [[lat - pad, lng - pad], [lat + pad, lng + pad]]
         else:
-            b = [[matched_df['Latitude'].min(),  matched_df['Longitude'].min()],
-                 [matched_df['Latitude'].max(),  matched_df['Longitude'].max()]]
-        map_obj.fit_bounds(b)
-        return
-
-    # 2) 若选中某州：按该州边界缩放
+            b = [[matched_df['Latitude'].min(),  matched_df['Longitude'].min() ],
+                 [matched_df['Latitude'].max(),  matched_df['Longitude'].max() ]]
+        map_obj.fit_bounds(b); return
     if (state_choice != '全部') and state_bnds:
-        map_obj.fit_bounds(state_bnds)
-        return
-
-    # 3) 默认：全美（CONUS）
+        map_obj.fit_bounds(state_bnds); return
     map_obj.fit_bounds(nat_bnds)
+fit_initial_or_search(m, CONUS_BOUNDS, selected_bounds, matched if 'matched' in locals() else None, search_active)
 
-# 这里 matched / search_active 来自你前面“搜索栏”那段（命中集合）
-fit_initial_or_search(
-    m,
-    CONUS_BOUNDS,
-    selected_bounds,                         # 有选州时的州边界
-    matched if 'matched' in locals() else None,
-    search_active if 'search_active' in locals() else False
-)
-
-# —— 右上角窄版图例：等级颜色 + 数量 + 总数 —— #
-lvl_order = [1, 2, 3, 4, 5, 6]
+# 右上角图例
+lvl_order = [1,2,3,4,5,6,7]
 lvl_counts = {lvl: int(points['Level'].eq(lvl).sum()) for lvl in lvl_order}
 total_points = int(points.shape[0])
-
 legend_html = f"""
 <div style="
-  position: fixed; top: 12px; right: 12px; z-index: 9999;
+  position: fixed; top: 10px; right: 12px; z-index: 9999;
   background: #fff; padding: 6px 8px; border-radius: 8px;
   box-shadow: 0 2px 6px rgba(0,0,0,.20); font-size: 12px; line-height: 1.4;
-  width: max-content; max-width: 180px; border: 1px solid rgba(0,0,0,.08);
+  width: max-content; max-width: 200px; border: 1px solid rgba(0,0,0,.08);
 ">
   <div style="font-weight:600; margin-bottom:4px;">等级颜色</div>
-
   <div style="display:grid; grid-template-columns: auto auto; grid-column-gap:8px; grid-row-gap:4px; align-items:center;">
     <span><span style='display:inline-block;width:10px;height:10px;background:#2ecc71;margin-right:6px;border-radius:2px;'></span>1</span><span>{lvl_counts.get(1,0)}</span>
     <span><span style='display:inline-block;width:10px;height:10px;background:#FFD700;margin-right:6px;border-radius:2px;'></span>2</span><span>{lvl_counts.get(2,0)}</span>
@@ -914,55 +734,37 @@ legend_html = f"""
     <span><span style='display:inline-block;width:10px;height:10px;background:#FFC0CB;margin-right:6px;border-radius:2px;'></span>4</span><span>{lvl_counts.get(4,0)}</span>
     <span><span style='display:inline-block;width:10px;height:10px;background:#8A2BE2;margin-right:6px;border-radius:2px;'></span>5</span><span>{lvl_counts.get(5,0)}</span>
     <span><span style='display:inline-block;width:10px;height:10px;background:#000;margin-right:6px;border-radius:2px;border:1px solid #eee;'></span>6</span><span>{lvl_counts.get(6,0)}</span>
+    <span><span style='display:inline-block;width:10px;height:10px;background:#1E90FF;margin-right:6px;border-radius:2px;'></span>7</span><span>{lvl_counts.get(7,0)}</span>
   </div>
-
   <div style="margin-top:6px; border-top:1px dashed #e5e7eb; padding-top:6px; font-weight:600;">
     总数：{total_points}
   </div>
 </div>
 """
-
 m.get_root().html.add_child(folium.Element(legend_html))
 
-
-
-
-# === 导出：当前筛选下“没有任何维修工”的郡/城市（按半径+阈值） ===
+# ======================
+# 导出空白范围（按半径+阈值）
+# ======================
 st.markdown("---")
-
-# 按当前地理层级决定标签
 unit_key = 'County' if geo_level.startswith("郡") else 'City'
-label_total   = "统计的郡数" if unit_key == 'County' else "统计的城市数"
-label_yes     = "有维修工的郡" if unit_key == 'County' else "有维修工的城市"
-label_no      = "没有维修工的郡" if unit_key == 'County' else "没有维修工的城市"
+label_total = "统计的郡数" if unit_key == 'County' else "统计的城市数"
+label_yes   = "有维修工的郡" if unit_key == 'County' else "有维修工的城市"
+label_no    = "没有维修工的郡" if unit_key == 'County' else "没有维修工的城市"
 
-# 用你前面已经构建好的 base_master（已按州/郡/市筛选，且包含 good_in_radius / meets）
 cm_units = base_master.copy()
-
-# 指标：随 radius_miles / min_good / good_levels 实时变化
 total_units  = len(cm_units)
-covered_units = int(cm_units['meets'].sum())          # 达标（圈内≥min_good 的“好工”）
-empty_units   = total_units - covered_units           # 不达标
+covered_units = int(cm_units['meets'].sum())
+empty_units   = total_units - covered_units
 empty_rate    = (empty_units / total_units) if total_units else 0
 
-# 顶部一行：三枚指标 + 右侧下载
 left, mid, right, dl = st.columns([0.9, 0.9, 0.9, 1.1])
+with left:  st.metric(label_total, f"{total_units:,}")
+with mid:   st.metric(label_yes,   f"{covered_units:,}")
+with right: st.metric(label_no,    f"{empty_units:,}", f"{empty_rate:.1%} 空白率")
 
-with left:
-    st.metric(label_total, f"{total_units:,}")
-with mid:
-    st.metric(label_yes, f"{covered_units:,}")
-with right:
-    st.metric(label_no, f"{empty_units:,}", f"{empty_rate:.1%} 空白率")
-
-# 导出“不达标”的范围列表（即 meets == False）
 gaps = cm_units[~cm_units['meets']].copy()
-# 为了兼容你之前的列名，这里把圈内“好工”数写到 workers_count
 gaps['workers_count'] = gaps['good_in_radius'].astype(int)
-
-
- # —— 指标后的导出设置 —— 
-unit_key = 'County' if geo_level.startswith("郡") else 'City'
 
 if unit_key == 'County':
     outcols   = ["State", "County", "ZIP_count", "ZIPs", "cLat", "cLng", "workers_count"]
@@ -971,11 +773,9 @@ else:
     outcols   = ["State", "City", "cLat", "cLng", "workers_count"]
     sort_cols = ["State", "City"]
 
-# 只保留确实存在的列，避免 KeyError
 outcols_present = [c for c in outcols if c in gaps.columns]
 gaps_sorted = gaps[outcols_present].sort_values(sort_cols).copy()
 
-# 县模式下把 ZIPs 列表展开为字符串（逗号分隔）
 if "ZIPs" in gaps_sorted.columns:
     def _z_to_str(z):
         if isinstance(z, (list, tuple, set, np.ndarray)):
@@ -983,12 +783,17 @@ if "ZIPs" in gaps_sorted.columns:
         return "" if pd.isna(z) else str(z)
     gaps_sorted["ZIPs"] = gaps_sorted["ZIPs"].apply(_z_to_str)
 
-# 生成下载文件
+def _build_xlsx(df_to_export: pd.DataFrame, sheet_name="Sheet1") -> io.BytesIO:
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df_to_export.to_excel(writer, index=False, sheet_name=sheet_name)
+    buf.seek(0)
+    return buf
+
 tag    = f"r{int(radius_miles)}_min{int(min_good)}"
 prefix = "counties" if unit_key == "County" else "cities"
 fname  = f"{prefix}_not_meeting_threshold_{tag}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-excel_bytes = _build_empty_counties_xlsx(gaps_sorted)
-
+excel_bytes = _build_xlsx(gaps_sorted, sheet_name="EmptyUnits")
 
 with dl:
     clicked = st.download_button(
@@ -1000,20 +805,324 @@ with dl:
         key="dl_top"
     )
 if clicked:
-        try:
-            save_path = os.path.join(data_dir, fname)
-            with open(save_path, "wb") as f:
-                f.write(excel_bytes.getbuffer())
-            st.toast(f"已保存到：{save_path}")
-        except Exception as e:
-            st.warning(f"无法保存到本地文件夹：{e}")
+    try:
+        save_path = os.path.join(data_dir, fname)
+        with open(save_path, "wb") as f:
+            f.write(excel_bytes.getbuffer())
+        st.toast(f"已保存到：{save_path}")
+    except Exception as e:
+        st.warning(f"无法保存到本地文件夹：{e}")
 
-   
-# —— 渲染 —— #
-if globals().get('USE_STATIC_MAP'):
+# ======================
+# 🌐 网上补充（折叠隐藏，保持原位置）
+# ======================
+@st.cache_data(show_spinner=False, ttl=3600)
+def fetch_osm_overpass(lat, lng, radius_m=30000, hvac_only=False):
+    if hvac_only:
+        q = f"""
+[out:json][timeout:25];
+(
+  node(around:{radius_m},{lat},{lng})["craft"="hvac"];
+  way(around:{radius_m},{lat},{lng})["craft"="hvac"];
+  node(around:{radius_m},{lat},{lng})["name"~"hvac|air.?conditioning|heating|cooling|refrigeration|furnace|boiler", i];
+  way(around:{radius_m},{lat},{lng})["name"~"hvac|air.?conditioning|heating|cooling|refrigeration|furnace|boiler", i];
+);
+out center tags 60;
+"""
+    else:
+        q = f"""
+[out:json][timeout:25];
+(
+  node(around:{radius_m},{lat},{lng})["craft"~"hvac|electrician|plumber"];
+  way(around:{radius_m},{lat},{lng})["craft"~"hvac|electrician|plumber"];
+);
+out center tags 60;
+"""
+    try:
+        r = requests.post("https://overpass-api.de/api/interpreter", data=q.encode("utf-8"), timeout=30)
+        j = r.json()
+    except Exception:
+        return []
+
+    out = []
+    for e in j.get("elements", []):
+        tags = e.get("tags", {}) or {}
+        name = tags.get("name") or tags.get("brand")
+        if not name:
+            continue
+        lat_e = e.get("lat") or (e.get("center") or {}).get("lat")
+        lon_e = e.get("lon") or (e.get("center") or {}).get("lon")
+        if lat_e is None or lon_e is None:
+            continue
+        addr = ", ".join(filter(None, [
+            tags.get("addr:housenumber"), tags.get("addr:street"),
+            tags.get("addr:city"), tags.get("addr:state"), tags.get("addr:postcode")
+        ]))
+        text = f"{name} {addr}"
+        if BLACK_RE.search(text):
+            continue
+        if hvac_only and (not HVAC_RE.search(text) and tags.get("craft") != "hvac"):
+            continue
+        out.append({
+            "Name": name,
+            "Address": addr if addr else pd.NA,
+            "Latitude": float(lat_e),
+            "Longitude": float(lon_e),
+            "Level": np.nan,
+            "ZIP": tags.get("addr:postcode"),
+            "State": pd.NA, "City": pd.NA, "County": pd.NA,
+            "Source": "web-osm",
+            "SourceTag": tags.get("craft",""),
+            "SourceId": str(e.get("id")),
+            "Rating": pd.NA,
+            "UserRatingsTotal": pd.NA,
+        })
+    return out
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def _gplaces_nearby_once(params, log=None):
+    base = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+    try:
+        r = requests.get(base, params=params, timeout=20)
+        j = r.json()
+    except Exception as e:
+        if log: log(f"Google 请求异常：{e}")
+        return None
+    status = j.get("status", "")
+    if status != "OK":
+        msg = j.get("error_message", "")
+        if log: log(f"Google 返回：{status} {(' - ' + msg) if msg else ''}")
+        return {"status": status, "results": j.get("results", []), "next_page_token": j.get("next_page_token")}
+    return {"status": "OK", "results": j.get("results", []), "next_page_token": j.get("next_page_token")}
+
+@st.cache_data(show_spinner=False, ttl=900)
+def _cache_ok_signature(params_signature, page):
+    return True
+
+def fetch_google_places(lat, lng, radius_m=30000, api_key=None, hvac_only=False, log=None):
+    key = api_key if api_key is not None else GOOGLE_PLACES_KEY
+    if not key:
+        if log: log("未检测到 Google API Key，跳过 Google。")
+        return []
+    params = {"key": key, "location": f"{lat},{lng}", "radius": int(radius_m), "type": "hvac_contractor", "language": "en"}
+    out, token, page = [], None, 0
+    while True:
+        req = dict(params)
+        if token:
+            req["pagetoken"] = token
+        resp = _gplaces_nearby_once(req, log=log)
+        if not resp: break
+        if resp["status"] != "OK": break
+        _cache_ok_signature(tuple(sorted(req.items())), page)
+        for it in resp["results"]:
+            name = it.get("name", "") or ""
+            addr = it.get("vicinity") or it.get("formatted_address") or ""
+            types = it.get("types", []) or []
+            text  = f"{name} {addr}"
+            is_hvac_type = ("hvac_contractor" in types)
+            is_hvac_text = bool(HVAC_RE.search(text))
+            if hvac_only and (not (is_hvac_type or is_hvac_text)): continue
+            if BLACK_RE.search(text): continue
+            out.append({
+                "Name": name, "Address": addr,
+                "Latitude": it["geometry"]["location"]["lat"], "Longitude": it["geometry"]["location"]["lng"],
+                "Level": np.nan, "ZIP": pd.NA, "State": pd.NA, "City": pd.NA, "County": pd.NA,
+                "Source": "web-google", "SourceTag": "hvac_contractor" if is_hvac_type else "",
+                "SourceId": it.get("place_id"), "Rating": it.get("rating"), "UserRatingsTotal": it.get("user_ratings_total"),
+            })
+        token = resp.get("next_page_token")
+        page += 1
+        if not token or page >= 3: break
+        time.sleep(2.2)  # 官方建议 pagetoken 至少等 ~2s
+
+    if hvac_only and not out:
+        if log: log("type=hvac_contractor 未命中，使用 keyword 兜底…")
+        kw = 'hvac OR "air conditioning" OR heating OR "heat pump" OR furnace OR boiler OR chiller'
+        req_kw = {"key": key, "location": f"{lat},{lng}", "radius": int(radius_m), "keyword": kw, "language": "en"}
+        resp = _gplaces_nearby_once(req_kw, log=log)
+        if resp and resp.get("results"):
+            for it in resp["results"]:
+                name = it.get("name", "") or ""
+                addr = it.get("vicinity") or it.get("formatted_address") or ""
+                text = f"{name} {addr}"
+                if BLACK_RE.search(text): continue
+                if not HVAC_RE.search(text): continue
+                out.append({
+                    "Name": name, "Address": addr,
+                    "Latitude": it["geometry"]["location"]["lat"], "Longitude": it["geometry"]["location"]["lng"],
+                    "Level": np.nan, "ZIP": pd.NA, "State": pd.NA, "City": pd.NA, "County": pd.NA,
+                    "Source": "web-google", "SourceTag": "keyword",
+                    "SourceId": it.get("place_id"), "Rating": it.get("rating"), "UserRatingsTotal": it.get("user_ratings_total"),
+                })
+    if log: log(f"Google 返回有效条数：{len(out)}")
+    return out
+
+def fetch_online_candidates_for_county(row, radius_m=30000, api_key=None, hvac_only=False, source_mode="自动（Google优先）", log=None):
+    lat = float(row["cLat"]); lng = float(row["cLng"])
+    items = []
+    if source_mode == "只用Google（更快）":
+        items = fetch_google_places(lat, lng, radius_m=radius_m, api_key=api_key, hvac_only=hvac_only, log=log)
+    elif source_mode == "只用OSM（备用，较慢）":
+        items = fetch_osm_overpass(lat, lng, radius_m=radius_m, hvac_only=hvac_only)
+    else:
+        if api_key:
+            items = fetch_google_places(lat, lng, radius_m=radius_m, api_key=api_key, hvac_only=hvac_only, log=log)
+        if not items:
+            items = fetch_osm_overpass(lat, lng, radius_m=radius_m, hvac_only=hvac_only)
+    for it in items:
+        it["State"]  = row["State"]
+        it["County"] = row.get("County", pd.NA)
+        it["City"]   = row.get("City",   pd.NA)
+    return items
+
+with st.expander("🌐 网上补充数据", expanded=False):
+    st.caption("（按当前选择的州/郡/城市抓取）")
+    col_a, col_b, col_c = st.columns([1.2, 1, 1.2])
+    with col_a:
+        max_cnties = st.number_input("最多抓取的范围数量", 1, 200, 10, 1)
+    with col_b:
+        search_rad = st.slider("抓取半径（公里）", 5, 80, 30, 5)
+    with col_c:
+        merge_back = st.checkbox("抓取后合并到数据集中（并加入地图）", value=True)
+    do_fetch = st.button("🔵 一键补充网上维修工（蓝色图标）", use_container_width=True)
+    online_df = pd.DataFrame()
+    if do_fetch:
+        log_box = st.empty()
+        def log(msg: str):
+            ts = datetime.now().strftime("%H:%M:%S")
+            log_box.markdown(f"📝 **[{ts}]** {msg}")
+        take_n = int(max_cnties); radius_m_fetch = int(search_rad * 1000)
+        base = counties_master if geo_level.startswith("郡") else cities_master
+        if unit_choice != '全部' and state_choice != '全部':
+            rows = base[(base["State"] == state_choice) & (base[name_col] == unit_choice)].head(1).to_dict("records")
+        elif state_choice != '全部':
+            rows = base[base["State"] == state_choice].sort_values(["State", name_col]).head(take_n).to_dict("records")
+        else:
+            rows = base.sort_values(["State", name_col]).head(take_n).to_dict("records")
+        if not rows:
+            st.warning("未选中任何抓取对象。请在侧边栏选择州/郡/城市后再试。")
+        else:
+            log(f"开始抓取 {len(rows)} 个范围（半径 {search_rad}km，HVAC仅限：{hvac_only}，数据源：{source_mode}）…")
+            all_items = []
+            for i, r0 in enumerate(rows, 1):
+                unit_name = r0.get("County") if geo_level.startswith("郡") else r0.get("City")
+                log(f"第 {i}/{len(rows)} 个：{r0['State']} / {unit_name} —— 请求中…")
+                try:
+                    items = fetch_online_candidates_for_county(
+                        r0, radius_m=radius_m_fetch, api_key=GOOGLE_PLACES_KEY,
+                        hvac_only=hvac_only, source_mode=source_mode, log=log)
+                    all_items.extend(items)
+                    log(f"✓ 新增 {len(items)} 条，累计 {len(all_items)} 条。")
+                except Exception as e:
+                    log(f"× 抓取失败：{e}")
+                time.sleep(0.2)
+            if all_items:
+                online_df = (pd.DataFrame(all_items)
+                             .drop_duplicates(subset=["Source","SourceId"], keep="first")
+                             .reset_index(drop=True))
+                online_df["Level"] = 7
+            else:
+                online_df = pd.DataFrame(columns=["Name","Address","Latitude","Longitude","Level","State","City","County","ZIP","Source","SourceId","Rating","UserRatingsTotal"])
+            if not online_df.empty:
+                add_fg = folium.FeatureGroup(name="网上新增维修工（抓取）", show=True).add_to(m)
+                for _, r in online_df.iterrows():
+                    name = _s(r.get("Name")); addr = _s(r.get("Address")); rating = _s(r.get("Rating"))
+                    popup_html = f"<b>名称:</b> {name}<br><b>地址:</b> {addr}<br><b>评分:</b> {rating}"
+                    folium.Marker(location=[float(r["Latitude"]), float(r["Longitude"])],
+                                  icon=blue_wrench_icon(), tooltip=f"🔧 新增：{name}", popup=popup_html).add_to(add_fg)
+                lat_min = float(online_df["Latitude"].min()); lat_max = float(online_df["Latitude"].max())
+                lon_min = float(online_df["Longitude"].min()); lon_max = float(online_df["Longitude"].max())
+                if np.isfinite(lat_min) and np.isfinite(lat_max) and np.isfinite(lon_min) and np.isfinite(lon_max):
+                    if (lat_min == lat_max) and (lon_min == lon_max):
+                        pad = 0.15; bounds = [[lat_min - pad, lon_min - pad], [lat_max + pad, lon_max + pad]]
+                    else:
+                        bounds = [[lat_min, lon_min], [lat_max, lon_max]]
+                    m.fit_bounds(bounds); st.session_state["_zoom_bounds"] = bounds
+            if merge_back and not online_df.empty:
+                cols = ["Name","Address","Latitude","Longitude","Level","State","City","County","ZIP"]
+                for c in cols:
+                    if c not in online_df.columns: online_df[c] = pd.NA
+                st.session_state.df = pd.concat([st.session_state.df, online_df[cols]], ignore_index=True)
+                st.toast("已把网上新增点（Level=7）合并到数据集中。")
+            buf_new = io.BytesIO()
+            with pd.ExcelWriter(buf_new, engine="openpyxl") as w:
+                online_df.to_excel(w, index=False, sheet_name="WebNew")
+            buf_new.seek(0)
+            st.download_button("下载本次抓取清单（Excel）", data=buf_new,
+                               file_name=f"web_new_workers_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True, key="dl_web_new")
+            if online_df.empty:
+                st.warning("抓取完成，但 0 条有效结果（可能 API 未返回或被过滤，或未设置 Google Key）。")
+            else:
+                st.success(f"抓取完成，共 {len(online_df)} 条有效结果。")
+
+# 图层开关
+folium.LayerControl(collapsed=True, position='topleft').add_to(m)
+
+# 若前面存了缩放范围（例如刚抓完新增点），渲染前兜底应用一次
+if "_zoom_bounds" in st.session_state:
+    m.fit_bounds(st.session_state.pop("_zoom_bounds"))
+
+# ======================
+# 渲染地图（靠上显示）
+# ======================
+if USE_STATIC_MAP:
     from streamlit.components.v1 import html
-    html(m.get_root().render(), height=800)  # 无灰屏、放大/缩小不触发 rerun
+    html(m.get_root().render(), height=780)  # 可以根据需要再调高/调低
 else:
-    map_height = st.session_state.get("map_height", 800)  # 桌面基准高度；手机CSS会调
+    map_height = st.session_state.get("map_height", 780)
     st_folium(m, use_container_width=True, height=map_height)
 
+# ======================
+# 侧边栏底部：数据源/Key/性能
+# ======================
+with st.sidebar:
+    st.markdown("---")
+    with st.expander("📁 数据源（固定文件夹）", expanded=False):
+        new_dir = st.text_input("数据文件夹路径", value=st.session_state.data_dir_path, help="可填本地或共享盘路径，例如 D:\\data 或 \\\\SERVER\\share")
+        if new_dir != st.session_state.data_dir_path:
+            st.session_state.data_dir_path = new_dir
+        os.makedirs(st.session_state.data_dir_path, exist_ok=True)
+
+        files2 = [f for f in os.listdir(st.session_state.data_dir_path) if f.lower().endswith(SUPPORT_EXTS)]
+        files2 = sorted(files2, key=lambda f: os.path.getmtime(os.path.join(st.session_state.data_dir_path, f)), reverse=True)
+
+        if files2:
+            pick = st.selectbox("选择已保存的数据文件", files2, index=0, key="pick_file_bottom")
+            if st.button("载入所选文件", key="btn_load_selected_bottom"):
+                try:
+                    path = os.path.join(st.session_state.data_dir_path, pick)
+                    st.session_state.df = _load_df(path)
+                    st.session_state.data_meta = {"filename": pick, "path": path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                    st.success(f"已载入：{pick}")
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.error(f"载入失败：{e}")
+        else:
+            st.info("当前文件夹没有任何数据文件（csv/xlsx/xls）。")
+
+        new_file = st.file_uploader("上传新数据（保存进文件夹）", type=['csv', 'xlsx', 'xls'], key="uploader_new_bottom")
+        if new_file is not None:
+            try:
+                saved_path = _save_uploaded(new_file, st.session_state.data_dir_path)
+                st.session_state.df = _load_df(saved_path)
+                st.session_state.data_meta = {"filename": os.path.basename(saved_path), "path": saved_path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                st.success(f"已上传并载入：{os.path.basename(saved_path)}")
+                st.experimental_rerun()
+            except Exception as e:
+                st.error(f"上传/读取失败：{e}")
+
+        if st.session_state.get("df") is not None:
+            meta = st.session_state.get("data_meta", {})
+            st.success(
+                f"**{meta.get('filename','(未命名)')}**\n\n"
+                f"路径：{meta.get('path','')}\n\n"
+                f"载入时间：{meta.get('loaded_at','')}\n\n"
+                f"行数：{len(st.session_state.df)}"
+            )
+
+    # Key 状态（放最底）
+    st.caption(
+        f"🔑 Google Places：{'✅ 已读取' if GOOGLE_PLACES_KEY else '❌ 未设置'}  {_mask_key(GOOGLE_PLACES_KEY)}"
+    )
