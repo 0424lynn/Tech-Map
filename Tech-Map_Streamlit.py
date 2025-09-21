@@ -136,10 +136,37 @@ div[data-testid="stIFrame"]{ margin-top: .15rem!important; }
 .stDownloadButton > button:hover { background-color: #1e40af !important; border-color: #1e3a8a !important; }
 .stDownloadButton > button:active { background-color: #1d4ed8 !important; transform: translateY(0.5px); }
 
+/* 统计指标（st.metric）– 缩小数字字号并收紧间距 */
+[data-testid="stMetricValue"] { 
+  font-size: 18px !important;      /* 原来可能是 20~36，调小到 18 */
+  line-height: 1.1 !important;
+  font-weight: 700 !important;
+}
+[data-testid="stMetricLabel"] { 
+  font-size: 12px !important; 
+  line-height: 1.1 !important;
+}
+[data-testid="stMetricDelta"] { 
+  font-size: 10px !important; 
+  line-height: 1.1 !important;
+}
+/* 轻微压缩上下留白（不同版本选择器可能略有差异，保留即可） */
+div[data-testid="stMetric"] > div {
+  padding-top: 2px !important;
+  padding-bottom: 2px !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
 /* 侧边栏更靠顶部 */
 section[data-testid="stSidebar"] > div { padding-top: .2rem !important; }
 </style>
+
+
 """, unsafe_allow_html=True)
+
+
+
 
 # ======================
 # 数据目录（固定文件夹）
