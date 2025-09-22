@@ -62,6 +62,18 @@ def big_flag_icon(size_px: int = 42, anchor_y_factor: float = 0.92):
         icon_anchor=(size_px // 2, anchor_y)
     )
 
+def customer_pin_icon(size_px: int = 42):
+    # 与大扳手同等大小
+    return folium.DivIcon(
+        html=f"""
+        <div style="filter: drop-shadow(0 0 2px rgba(0,0,0,.35));">
+          <span style="font-size:{size_px}px; line-height:1;">📍</span>
+        </div>
+        """,
+        icon_size=(size_px, size_px),
+        icon_anchor=(size_px // 2, int(size_px * 0.92)),
+    )
+
 # ---------- 读取 Google Key ----------
 def _read_api_key():
     key = os.environ.get("GOOGLE_PLACES_API_KEY")
@@ -86,87 +98,59 @@ def _mask_key(k: str, keep=6):
     return k[:keep] + "…" + str(len(k))
 
 # ======================
-# 全局样式（更紧凑 + 品牌）
+# 全局样式（紧凑/边框 + 弹窗更宽）
 # ======================
 st.markdown("""
 <style>
-/* 去掉默认装饰 */
+/* UI chrome */
 div[data-testid="stDecoration"]{display:none!important;}
 header[data-testid="stHeader"]{height:0!important;visibility:hidden!important;}
 footer{display:none!important;}
 :root, .stApp { --top-toolbar-height:0px !important; }
 
-/* 主区更紧凑 */
+/* layout tighten */
 .stAppViewContainer{ padding-top:0!important; }
-.main .block-container{ padding-top:.15rem!important; margin-top:0!important; }
-.main .block-container > div{ margin-top:.35rem!important; }
+.main .block-container{ padding-top:.1rem!important; margin-top:0!important; }
+.main .block-container > div{ margin-top:.3rem!important; }
 
-/* 缩小列块间距（搜索行下面更近） */
-div[data-testid="stHorizontalBlock"]{ margin-bottom:.15rem!important; }
+/* row spacing tighter */
+div[data-testid="stHorizontalBlock"]{ margin-bottom:.1rem!important; }
 
-/* 两侧标题间距更小 */
-h2, h3, h4 { margin: .35rem 0 .25rem 0 !important; }
-
-/* 侧边栏品牌条 */
-#brandbox{
-  margin:0 0 .35rem 0; padding:.55rem .6rem .5rem .6rem;
-  border-radius:12px; border:1px solid rgba(0,0,0,.06);
-  background:linear-gradient(135deg,#0ea5e9 0%,#2563eb 60%,#1e3a8a 100%);
-  color:#fff; font-weight:800; letter-spacing:.6px; line-height:1.15;
-  box-shadow:0 2px 8px rgba(0,0,0,.12); font-size:16px;
-}
-#brandbox small{ display:block; opacity:.9; font-weight:600; letter-spacing:.3px; font-size:12px; }
-
-/* 控件字体 */
+/* fonts */
 html, body, .stApp, .main .block-container { font-size: 13px !important; }
 section[data-testid="stSidebar"], section[data-testid="stSidebar"] * { font-size: 12.5px !important; }
 
-/* 分割线更薄更紧凑 */
-hr { margin: .2rem 0 !important; }
+/* metrics smaller */
+[data-testid="stMetricValue"] { font-size: 18px !important; line-height:1.1!important; font-weight:700!important; }
+[data-testid="stMetricLabel"] { font-size: 12px !important; line-height:1.1!important; }
+[data-testid="stMetricDelta"] { font-size: 10px !important; line-height:1.1!important; }
+div[data-testid="stMetric"] > div { padding-top:2px!important; padding-bottom:2px!important; margin:0!important; }
 
-/* Folium IFrame 顶部更贴近 */
-div[data-testid="stIFrame"]{ margin-top: .15rem!important; }
+/* map iframe closer */
+div[data-testid="stIFrame"]{ margin-top: .1rem!important; }
 
-/* 下载按钮美化 */
+/* buttons */
 .stDownloadButton > button{
   background:#2563eb!important; color:#fff!important;
   border:1px solid #1d4ed8!important; border-radius:8px!important;
   box-shadow:0 2px 6px rgba(37,99,235,.25)!important;
 }
-.stDownloadButton > button:hover { background-color: #1e40af !important; border-color: #1e3a8a !important; }
-.stDownloadButton > button:active { background-color: #1d4ed8 !important; transform: translateY(0.5px); }
+.stDownloadButton > button:hover { background-color:#1e40af!important; border-color:#1e3a8a!important; }
+.stDownloadButton > button:active { background-color:#1d4ed8!important; transform: translateY(0.5px); }
 
-/* 统计指标（st.metric）– 缩小数字字号并收紧间距 */
-[data-testid="stMetricValue"] { 
-  font-size: 18px !important;      /* 原来可能是 20~36，调小到 18 */
-  line-height: 1.1 !important;
-  font-weight: 700 !important;
-}
-[data-testid="stMetricLabel"] { 
-  font-size: 12px !important; 
-  line-height: 1.1 !important;
-}
-[data-testid="stMetricDelta"] { 
-  font-size: 10px !important; 
-  line-height: 1.1 !important;
-}
-/* 轻微压缩上下留白（不同版本选择器可能略有差异，保留即可） */
-div[data-testid="stMetric"] > div {
-  padding-top: 2px !important;
-  padding-bottom: 2px !important;
-  margin-top: 0 !important;
-  margin-bottom: 0 !important;
+/* subtle borders */
+.main .block-container > div{
+  border:1px solid rgba(0,0,0,.06);
+  border-radius:10px;
+  padding:.6rem .7rem;
+  background:#fff;
+  box-shadow:0 1px 4px rgba(0,0,0,.04);
 }
 
-/* 侧边栏更靠顶部 */
-section[data-testid="stSidebar"] > div { padding-top: .2rem !important; }
+/* 让 Leaflet 弹窗宽一点 */
+.leaflet-popup-content { min-width: 260px; }
 </style>
-
-
 """, unsafe_allow_html=True)
-
-
-
 
 # ======================
 # 数据目录（固定文件夹）
@@ -211,9 +195,6 @@ if "df" not in st.session_state:
     st.session_state.df = None
 if "data_meta" not in st.session_state:
     st.session_state.data_meta = {}
-
-
-
 
 # 启动时自动加载最近文件
 _files = _list_files()
@@ -260,7 +241,7 @@ def build_city_county_master(zip_all_df: pd.DataFrame):
 
     zip_map = (zip_all_df.dropna(subset=['county_name'])
                .groupby(['state_code','county_name'])['postal_code']
-               .apply(lambda s: sorted(set(s))).reset_index()
+               .apply(lambda s: sorted(set(s))).reset_index()\
                .rename(columns={'state_code':'State','county_name':'County','postal_code':'ZIPs'}))
     counties = counties.merge(zip_map, on=['State','County'], how='left')
     return cities, counties
@@ -276,6 +257,105 @@ def load_us_states_geojson_cached(geojson_path):
     with open(geojson_path, "w", encoding="utf-8") as f:
         json.dump(data, f)
     return data
+
+# ---- 更稳的地址解析（坐标/ZIP/Google/OSM 多重兜底）----
+ZIP_RE = re.compile(r'\b(\d{5})(?:-\d{4})?\b')
+LATLNG_RE = re.compile(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$')
+_US_STATES = {
+    "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS",
+    "KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY",
+    "NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC","PR"
+}
+def _is_likely_zip_input(s: str) -> bool:
+    s = (s or "").strip()
+    return bool(re.fullmatch(r'(zip\s*)?\d{5}(-\d{4})?$', s, flags=re.I))
+
+def _pick_zip_from_free_text(addr: str) -> str | None:
+    if not addr:
+        return None
+    matches = list(ZIP_RE.finditer(addr))
+    if not matches:
+        return None
+    best = None
+    best_score = -1
+    n = len(addr)
+    for m in matches:
+        start = m.start()
+        zip5 = m.group(1)
+        score = 0
+        if start > n * 0.4: score += 2
+        elif start > n * 0.25: score += 1
+        left = addr[max(0, start-12):start].upper()
+        for st_ab in _US_STATES:
+            if re.search(rf'[\s,()]({st_ab})[\s,)]?$', left):
+                score += 3; break
+        right = addr[m.end(): m.end()+2]
+        if right == "" or right.startswith(","):
+            score += 1
+        if score > best_score:
+            best_score, best = score, zip5
+    return best if best_score >= 2 else None
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def geocode_address(addr: str, key: str | None):
+    addr = (addr or "").strip()
+    if not addr:
+        return None
+    # ① 直接坐标
+    m = LATLNG_RE.match(addr)
+    if m:
+        lat = float(m.group(1)); lng = float(m.group(2))
+        return {"lat": lat, "lng": lng, "formatted": f"{lat:.6f}, {lng:.6f}", "source": "coord"}
+    # ② 整串就是 ZIP 时才按 ZIP 解析
+    if _is_likely_zip_input(addr):
+        try:
+            import pgeocode
+            nomi = pgeocode.Nominatim("us")
+            z = re.search(r'(\d{5})(?:-\d{4})?', addr).group(1)
+            info = nomi.query_postal_code(z)
+            if pd.notna(info.latitude) and pd.notna(info.longitude):
+                return {"lat": float(info.latitude), "lng": float(info.longitude), "formatted": f"ZIP {z}", "source": "zip"}
+        except Exception:
+            pass
+    # ③ Google 优先
+    if key:
+        try:
+            r = requests.get("https://maps.googleapis.com/maps/api/geocode/json",
+                             params={"address": addr, "key": key, "language": "en"}, timeout=15)
+            j = r.json()
+            if j.get("status") == "OK" and j.get("results"):
+                g = j["results"][0]; loc = g["geometry"]["location"]
+                return {"lat": float(loc["lat"]), "lng": float(loc["lng"]),
+                        "formatted": g.get("formatted_address", addr), "source": "google"}
+        except Exception:
+            pass
+    # ④ OSM / ⑤ maps.co 兜底
+    headers = {"User-Agent": "tech-map/1.0 (contact: support@example.com)"}
+    osm_params = {"q": addr, "format": "json", "limit": 1, "addressdetails": 1, "countrycodes": "us", "accept-language": "en"}
+    for url, src in [("https://nominatim.openstreetmap.org/search", "osm"),
+                     ("https://geocode.maps.co/search", "mapsco")]:
+        try:
+            r2 = requests.get(url, params=osm_params, headers=headers, timeout=20)
+            arr = r2.json()
+            if isinstance(arr, list) and arr:
+                it = arr[0]
+                return {"lat": float(it["lat"]), "lng": float(it["lon"]),
+                        "formatted": it.get("display_name", addr), "source": src}
+        except Exception:
+            pass
+    # ⑥ 最后：在整串中“聪明挑一个”更像 ZIP 的 5 位数
+    z_pick = _pick_zip_from_free_text(addr)
+    if z_pick:
+        try:
+            import pgeocode
+            nomi = pgeocode.Nominatim("us")
+            info = nomi.query_postal_code(z_pick)
+            if pd.notna(info.latitude) and pd.notna(info.longitude):
+                return {"lat": float(info.latitude), "lng": float(info.longitude),
+                        "formatted": f"ZIP {z_pick}", "source": "zip"}
+        except Exception:
+            pass
+    return None
 
 # ======================
 # 数据清洗/回填
@@ -434,15 +514,14 @@ with st.sidebar:
 
     # “好维修工”与半径阈值
     st.subheader("优选规则")
-    good_levels   = st.sidebar.multiselect("维修工等级", [1,2,3,4,5,6,7], default=[1,2,3,4,5,6])
+    good_levels   = st.multiselect("维修工等级", [1,2,3,4,5,6,7], default=[1,2,3,4,5,6])
     radius_miles  = st.slider("半径（英里）", 5, 50, 20, 5)
     min_good      = st.number_input("圈内≥ 好维修工数量", 1, 10, 2, 1)
     only_show_units       = st.checkbox("只显示达标范围", value=True)
     only_show_good_points = st.checkbox("只显示维修工点位", value=False)
 
     st.markdown("---")
-
-    # 网上补充相关的筛选（数据源选择 + 过滤）
+    # 网上补充相关
     source_mode = st.radio("网上补充数据源", ["自动（Google优先）", "只用Google（更快）", "只用OSM（备用，较慢）"], index=0)
     if "hvac_only" not in st.session_state:
         st.session_state.hvac_only = False
@@ -450,25 +529,88 @@ with st.sidebar:
     show_only_new = st.checkbox("只看网上新增（Level = 7）", value=False)
 
     st.markdown("---")
-
-    # 性能设置（放底部）
-    use_cluster   = st.session_state.get("perf_use_cluster", True)
-    prefer_canvas = st.session_state.get("perf_prefer_canvas", True)
-    max_units     = st.session_state.get("perf_max_units", 1500)
+    # 性能设置
     with st.expander("⚡ 性能设置", expanded=False):
-        st.checkbox("点位聚合（多点更快）", key="perf_use_cluster", value=use_cluster)
-        st.checkbox("Canvas 渲染矢量", key="perf_prefer_canvas", value=prefer_canvas)
-        st.slider("最多渲染范围数（郡/城市圈）", 200, 5000, int(max_units), 100, key="perf_max_units")
-    use_cluster   = st.session_state.get("perf_use_cluster", True)
-    prefer_canvas = st.session_state.get("perf_prefer_canvas", True)
-    max_units     = st.session_state.get("perf_max_units", 1500)
+        st.checkbox("点位聚合（多点更快）", key="perf_use_cluster", value=st.session_state.get("perf_use_cluster", True))
+        st.checkbox("Canvas 渲染矢量", key="perf_prefer_canvas", value=st.session_state.get("perf_prefer_canvas", True))
+        st.slider("最多渲染范围数（郡/城市圈）", 200, 5000, int(st.session_state.get("perf_max_units", 1500)), 100, key="perf_max_units")
 
-# 顶部搜索（压缩间距）
-sc1, sc2 = st.columns([0.5, 0.5])
-with sc1:
+    # 侧边栏底部：数据源/Key
+    st.markdown("---")
+    with st.expander("📁 数据源（固定文件夹）", expanded=False):
+        new_dir = st.text_input("数据文件夹路径", value=st.session_state.data_dir_path)
+        if new_dir != st.session_state.data_dir_path:
+            st.session_state.data_dir_path = new_dir
+        os.makedirs(st.session_state.data_dir_path, exist_ok=True)
+
+        files2 = [f for f in os.listdir(st.session_state.data_dir_path) if f.lower().endswith(SUPPORT_EXTS)]
+        files2 = sorted(files2, key=lambda f: os.path.getmtime(os.path.join(st.session_state.data_dir_path, f)), reverse=True)
+
+        if files2:
+            pick = st.selectbox("选择已保存的数据文件", files2, index=0, key="pick_file_bottom")
+            if st.button("载入所选文件", key="btn_load_selected_bottom"):
+                try:
+                    path = os.path.join(st.session_state.data_dir_path, pick)
+                    st.session_state.df = _load_df(path)
+                    st.session_state.data_meta = {"filename": pick, "path": path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                    st.success(f"已载入：{pick}")
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.error(f"载入失败：{e}")
+        else:
+            st.info("当前文件夹没有任何数据文件（csv/xlsx/xls）。")
+
+        new_file = st.file_uploader("上传新数据（保存进文件夹）", type=['csv', 'xlsx', 'xls'], key="uploader_new_bottom")
+        if new_file is not None:
+            try:
+                saved_path = _save_uploaded(new_file, st.session_state.data_dir_path)
+                st.session_state.df = _load_df(saved_path)
+                st.session_state.data_meta = {"filename": os.path.basename(saved_path), "path": saved_path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                st.success(f"已上传并载入：{os.path.basename(saved_path)}")
+                st.experimental_rerun()
+            except Exception as e:
+                st.error(f"上传/读取失败：{e}")
+
+        if st.session_state.get("df") is not None:
+            meta = st.session_state.get("data_meta", {})
+            st.success(
+                f"**{meta.get('filename','(未命名)')}**\n\n"
+                f"路径：{meta.get('path','')}\n\n"
+                f"载入时间：{meta.get('loaded_at','')}\n\n"
+                f"行数：{len(st.session_state.df)}"
+            )
+
+    st.caption(f"🔑 Google Places：{'✅ 已读取' if GOOGLE_PLACES_KEY else '❌ 未设置'}  {_mask_key(GOOGLE_PLACES_KEY)}")
+
+# ======================
+# 顶部搜索行：名称 / 维修工地址关键词 / 客户地址（按回车自动定位📍）
+# ======================
+
+# 回车自动地理编码（去掉按钮）
+def _on_geocode_customer():
+    addr = st.session_state.get("cust_quick_addr", "").strip()
+    if not addr:
+        st.session_state.pop("cust_quick_pin", None)
+        return
+    gq = geocode_address(addr, GOOGLE_PLACES_KEY)
+    if not gq:
+        st.toast("地址解析失败：请更换写法或补充城市/州；也可直接输入坐标 34.05,-118.24。", icon="⚠️")
+        return
+    st.session_state['cust_quick_pin'] = {"lat": gq["lat"], "lng": gq["lng"], "formatted": gq.get("formatted", addr)}
+    # 轻微缩放到该点
+    pad = 0.2
+    st.session_state["_zoom_bounds"] = [[gq["lat"]-pad, gq["lng"]-pad],[gq["lat"]+pad, gq["lng"]+pad]]
+    st.toast(f"已定位到：{gq.get('formatted','目标地址')}", icon="📍")
+
+c1, c2, c3 = st.columns([0.28, 0.36, 0.36])
+with c1:
     q_name = st.text_input("维修工名称", key="q_name", placeholder="例如：ACME Tech", autocomplete="off")
-with sc2:
-    q_addr = st.text_input("地址关键词", key="q_addr", placeholder="城市、州、街道或ZIP", autocomplete="off")
+with c2:
+    q_addr = st.text_input("维修工地址关键词", key="q_addr", placeholder="城市/州/街道/ZIP", autocomplete="off")
+with c3:
+    st.text_input("客户地址（回车定位📍）", key="cust_quick_addr",
+                  placeholder="例：20520 Lahser Rd, Detroit, MI 48219",
+                  on_change=_on_geocode_customer)
 
 # ======================
 # 过滤（基础 + HVAC）
@@ -495,7 +637,7 @@ if (not geo_level.startswith("郡")) and unit_choice != '全部':
 
 filtered = df.loc[mask].copy()
 
-if hvac_only:
+if st.session_state.get("hvac_only", False):
     text = (
         filtered.get('Name',    pd.Series('', index=filtered.index)).astype('string').fillna('') + ' ' +
         filtered.get('Address', pd.Series('', index=filtered.index)).astype('string').fillna('') + ' ' +
@@ -523,7 +665,6 @@ if unit_choice != '全部':
 base_master = base_master.copy()
 
 points_all  = df.dropna(subset=['Latitude','Longitude']).copy()
-points_good = points_all[points_all['Level'].isin(good_levels)]
 
 R_EARTH_MI = 3958.7613
 def counts_balltree(centroids_df, pts_df, radius_mi):
@@ -558,6 +699,8 @@ try:
 except Exception:
     use_sklearn = False
 
+# 根据“好等级”选择统计（修正：用 good_levels 而不是固定 1-6）
+points_good = points_all[points_all['Level'].isin(good_levels)]
 if use_sklearn:
     P_all = np.radians(points_all[['Latitude','Longitude']].to_numpy()) if len(points_all) else np.empty((0,2))
     P_good = np.radians(points_good[['Latitude','Longitude']].to_numpy()) if len(points_good) else np.empty((0,2))
@@ -577,7 +720,7 @@ base_master['meets'] = base_master['good_in_radius'] >= min_good
 centroids_to_plot = base_master if not only_show_units else base_master[base_master['meets']]
 centroids_to_plot = (centroids_to_plot
                      .sort_values(['meets','good_in_radius','all_in_radius'], ascending=[False, False, False])
-                     .head(max_units)
+                     .head(st.session_state.get("perf_max_units", 1500))
                      .copy())
 
 # 底图点位（应用“只看新增/只看好维修工”）
@@ -587,7 +730,19 @@ if show_only_new:
 if only_show_good_points:
     points = points[points['Level'].isin(good_levels)]
 
-# 顶部命中集合（用于 🚩）
+# —— 修正着色：把 Level 强制解析为 1~7 的整数，避免显示串色 —— #
+def _coerce_level_int(x):
+    try:
+        m = re.search(r'(\d+)', str(x))
+        if m:
+            v = int(m.group(1))
+            return v if 1 <= v <= 7 else np.nan
+    except Exception:
+        pass
+    return np.nan
+points['Level'] = points['Level'].apply(_coerce_level_int)
+
+# 顶部命中：红旗
 def _contains_safe(s, q):
     return s.astype(str).str.contains(re.escape(q), case=False, na=False)
 matched = points.copy()
@@ -611,8 +766,9 @@ search_active = bool(has_query) and (len(matched) > 0)
 # 地图绘制
 # ======================
 US_STATES_GEO_PATH = os.path.join(data_dir, "us_states.geojson")
-level_color = {1:'#2ecc71',2:'#FFD700',3:'#FF4D4F',4:'#FFC0CB',5:'#8A2BE2',6:'#000000',7:'#1E90FF'}
+level_color = {1:'#2ecc71',2:'#FFD700',3:'#FF4D4F',4:'#FFC0CB',5:'#8A2BE2',6:'#000000',7:'#1E90FF'}  # 1=绿
 
+prefer_canvas = st.session_state.get("perf_prefer_canvas", True)
 m = folium.Map(location=[37.8, -96.0], zoom_start=4, keyboard=False,
                prefer_canvas=prefer_canvas, tiles="CartoDB positron")
 m.get_root().header.add_child(folium.Element("""
@@ -680,6 +836,28 @@ for _, r in centroids_to_plot.iterrows():
 # 点位层
 workers_fg = folium.FeatureGroup(name="维修工点位", show=True).add_to(m)
 
+use_cluster = st.session_state.get("perf_use_cluster", True)
+
+# 客户快速定位点（若已解析成功）—— 先准备坐标，后面算距离要用
+cust_lat = cust_lng = None
+if "cust_quick_pin" in st.session_state:
+    p = st.session_state["cust_quick_pin"]
+    cust_lat, cust_lng = float(p["lat"]), float(p["lng"])
+    folium.Marker(
+        location=[cust_lat, cust_lng],
+        icon=customer_pin_icon(size_px=42),
+        tooltip=f"📍 {p.get('formatted','客户地址')}",
+        popup=f"<div style='min-width:260px'><b>客户地址：</b>{_s(p.get('formatted'))}</div>",
+        z_index_offset=12000
+    ).add_to(m)
+
+# 距离计算（英里）
+def haversine_miles(lat1, lon1, lat2, lon2):
+    lat1,lon1,lat2,lon2 = map(np.radians, [lat1,lon1,lat2,lon2])
+    dlat = lat2-lat1; dlon = lon2-lon1
+    a = np.sin(dlat/2)**2 + np.cos(lat1)*np.cos(lat2)*np.sin(dlon/2)**2
+    return 3958.7613 * 2 * np.arcsin(np.sqrt(a))
+
 if use_cluster and len(points) > 2000:
     clusters = {}
     for lvl, color in level_color.items():
@@ -689,53 +867,81 @@ if use_cluster and len(points) > 2000:
             function(cluster) {{
               var count = cluster.getChildCount();
               return new L.DivIcon({{
-                html: '<div style="background:{color};opacity:0.85;border-radius:20px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;color:white;font-weight:600;border:2px solid white;">'+count+'</div>',
+                html: '<div style="background:{color};opacity:0.90;border-radius:20px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;color:white;font-weight:700;border:2px solid white;">'+count+'</div>',
                 className: 'marker-cluster', iconSize: new L.Point(36, 36)
               }});
             }}
             """
         ).add_to(workers_fg)
     for _, row in points.iterrows():
-        lvl = int(row['Level']) if not pd.isna(row['Level']) else None
+        lvl = int(row['Level']) if pd.notna(row['Level']) else None
         color = level_color.get(lvl, '#3388ff')
+        dist_line = ""
+        if cust_lat is not None:
+            try:
+                d = float(haversine_miles(cust_lat, cust_lng, float(row['Latitude']), float(row['Longitude'])))
+                dist_line = f"<br><b>距离：</b>{d:.1f} mi"
+            except Exception:
+                pass
+        popup_html = (f"<div style='min-width:260px'>"
+                      f"<b>名称：</b>{_s(row.get('Name',''))}"
+                      f"<br><b>等级：</b>{_s(row.get('Level',''))}"
+                      f"<br><b>州：</b>{_s(row.get('State',''))}"
+                      f"<br><b>ZIP：</b>{_s(row.get('ZIP',''))}"
+                      f"{dist_line}</div>")
         folium.CircleMarker(
             location=[row['Latitude'], row['Longitude']],
             radius=5, color=color, fill=True, fill_color=color, fill_opacity=0.9,
-            popup=(f"名称:{row.get('Name','')}<br>等级:{row.get('Level','')}<br>"
-                   f"州(State):{row.get('State','')}<br>市/郡:{row.get('City','')}/{row.get('County','')}<br>ZIP:{row.get('ZIP','')}")
+            popup=popup_html
         ).add_to(clusters.get(lvl, workers_fg))
 else:
     for _, row in points.iterrows():
-        lvl = int(row['Level']) if not pd.isna(row['Level']) else None
+        lvl = int(row['Level']) if pd.notna(row['Level']) else None
         color = level_color.get(lvl, '#3388ff')
+        dist_line = ""
+        if cust_lat is not None:
+            try:
+                d = float(haversine_miles(cust_lat, cust_lng, float(row['Latitude']), float(row['Longitude'])))
+                dist_line = f"<br><b>距离：</b>{d:.1f} mi"
+            except Exception:
+                pass
+        popup_html = (f"<div style='min-width:260px'>"
+                      f"<b>名称：</b>{_s(row.get('Name',''))}"
+                      f"<br><b>等级：</b>{_s(row.get('Level',''))}"
+                      f"<br><b>州：</b>{_s(row.get('State',''))}"
+                      f"<br><b>ZIP：</b>{_s(row.get('ZIP',''))}"
+                      f"{dist_line}</div>")
         folium.CircleMarker(
             location=[row['Latitude'], row['Longitude']],
             radius=6, color=color, fill=True, fill_color=color, fill_opacity=0.9,
-            popup=(f"名称:{row.get('Name','')}<br>等级:{row.get('Level','')}<br>"
-                   f"州(State):{row.get('State','')}<br>市/郡:{row.get('City','')}/{row.get('County','')}<br>ZIP:{row.get('ZIP','')}")
+            popup=popup_html
         ).add_to(workers_fg)
 
-# 搜索命中：红旗
+# 搜索命中：红旗（与客户📍并存）
 if search_active and len(matched) > 0:
     for _, r in matched.iterrows():
         folium.Marker(
             location=[float(r['Latitude']), float(r['Longitude'])],
             icon=big_flag_icon(size_px=42),
             tooltip=f"🔎 命中：{r.get('Name','')}",
-            popup=(f"<b>名称：</b>{r.get('Name','')}<br><b>地址：</b>{r.get('Address','')}<br><b>等级：</b>{r.get('Level','')}"),
+            popup=(f"<div style='min-width:260px'><b>名称：</b>{_s(r.get('Name',''))}"
+                   f"<br><b>地址：</b>{_s(r.get('Address',''))}"
+                   f"<br><b>等级：</b>{_s(r.get('Level',''))}</div>"),
             z_index_offset=10000
         ).add_to(m)
 
 # 初始/智能缩放
 CONUS_BOUNDS = [[24.5, -125.0], [49.5, -66.9]]
 def fit_initial_or_search(map_obj, nat_bnds, state_bnds, matched_df, search_active):
+    if "_zoom_bounds" in st.session_state:
+        map_obj.fit_bounds(st.session_state.pop("_zoom_bounds")); return
     if search_active and matched_df is not None and len(matched_df) > 0:
         if len(matched_df) == 1:
             lat = float(matched_df['Latitude'].iloc[0]); lng = float(matched_df['Longitude'].iloc[0])
             pad = 0.35; b = [[lat - pad, lng - pad], [lat + pad, lng + pad]]
         else:
-            b = [[matched_df['Latitude'].min(),  matched_df['Longitude'].min() ],
-                 [matched_df['Latitude'].max(),  matched_df['Longitude'].max() ]]
+            b = [[matched_df['Latitude'].min(),  matched_df['Longitude'].min()],
+                 [matched_df['Latitude'].max(),  matched_df['Longitude'].max()]]
         map_obj.fit_bounds(b); return
     if (state_choice != '全部') and state_bnds:
         map_obj.fit_bounds(state_bnds); return
@@ -822,15 +1028,14 @@ prefix = "counties" if unit_key == "County" else "cities"
 fname  = f"{prefix}_not_meeting_threshold_{tag}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 excel_bytes = _build_xlsx(gaps_sorted, sheet_name="EmptyUnits")
 
-with dl:
-    clicked = st.download_button(
-        "下载",
-        data=excel_bytes,
-        file_name=fname,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        key="dl_top"
-    )
+clicked = st.download_button(
+    "下载",
+    data=excel_bytes,
+    file_name=fname,
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True,
+    key="dl_top"
+)
 if clicked:
     try:
         save_path = os.path.join(data_dir, fname)
@@ -888,7 +1093,7 @@ out center tags 60;
         text = f"{name} {addr}"
         if BLACK_RE.search(text):
             continue
-        if hvac_only and (not HVAC_RE.search(text) and tags.get("craft") != "hvac"):
+        if st.session_state.get("hvac_only", False) and (not HVAC_RE.search(text) and tags.get("craft") != "hvac"):
             continue
         out.append({
             "Name": name,
@@ -960,7 +1165,7 @@ def fetch_google_places(lat, lng, radius_m=30000, api_key=None, hvac_only=False,
         token = resp.get("next_page_token")
         page += 1
         if not token or page >= 3: break
-        time.sleep(2.2)  # 官方建议 pagetoken 至少等 ~2s
+        time.sleep(2.2)
 
     if hvac_only and not out:
         if log: log("type=hvac_contractor 未命中，使用 keyword 兜底…")
@@ -1029,7 +1234,7 @@ with st.expander("🌐 网上补充数据", expanded=False):
         if not rows:
             st.warning("未选中任何抓取对象。请在侧边栏选择州/郡/城市后再试。")
         else:
-            log(f"开始抓取 {len(rows)} 个范围（半径 {search_rad}km，HVAC仅限：{hvac_only}，数据源：{source_mode}）…")
+            log(f"开始抓取 {len(rows)} 个范围（半径 {search_rad}km，HVAC仅限：{st.session_state.get('hvac_only', False)}，数据源：{source_mode}）…")
             all_items = []
             for i, r0 in enumerate(rows, 1):
                 unit_name = r0.get("County") if geo_level.startswith("郡") else r0.get("City")
@@ -1037,7 +1242,7 @@ with st.expander("🌐 网上补充数据", expanded=False):
                 try:
                     items = fetch_online_candidates_for_county(
                         r0, radius_m=radius_m_fetch, api_key=GOOGLE_PLACES_KEY,
-                        hvac_only=hvac_only, source_mode=source_mode, log=log)
+                        hvac_only=st.session_state.get('hvac_only', False), source_mode=source_mode, log=log)
                     all_items.extend(items)
                     log(f"✓ 新增 {len(items)} 条，累计 {len(all_items)} 条。")
                 except Exception as e:
@@ -1054,7 +1259,7 @@ with st.expander("🌐 网上补充数据", expanded=False):
                 add_fg = folium.FeatureGroup(name="网上新增维修工（抓取）", show=True).add_to(m)
                 for _, r in online_df.iterrows():
                     name = _s(r.get("Name")); addr = _s(r.get("Address")); rating = _s(r.get("Rating"))
-                    popup_html = f"<b>名称:</b> {name}<br><b>地址:</b> {addr}<br><b>评分:</b> {rating}"
+                    popup_html = f"<div style='min-width:260px'><b>名称:</b> {name}<br><b>地址:</b> {addr}<br><b>评分:</b> {rating}</div>"
                     folium.Marker(location=[float(r["Latitude"]), float(r["Longitude"])],
                                   icon=blue_wrench_icon(), tooltip=f"🔧 新增：{name}", popup=popup_html).add_to(add_fg)
                 lat_min = float(online_df["Latitude"].min()); lat_max = float(online_df["Latitude"].max())
@@ -1087,7 +1292,7 @@ with st.expander("🌐 网上补充数据", expanded=False):
 # 图层开关
 folium.LayerControl(collapsed=True, position='topleft').add_to(m)
 
-# 若前面存了缩放范围（例如刚抓完新增点），渲染前兜底应用一次
+# 若前面存了缩放范围（例如刚定位/抓完新增点），渲染前兜底应用一次
 if "_zoom_bounds" in st.session_state:
     m.fit_bounds(st.session_state.pop("_zoom_bounds"))
 
@@ -1096,60 +1301,7 @@ if "_zoom_bounds" in st.session_state:
 # ======================
 if USE_STATIC_MAP:
     from streamlit.components.v1 import html
-    html(m.get_root().render(), height=780)  # 可以根据需要再调高/调低
+    html(m.get_root().render(), height=760)
 else:
-    map_height = st.session_state.get("map_height", 780)
+    map_height = st.session_state.get("map_height", 760)
     st_folium(m, use_container_width=True, height=map_height)
-
-# ======================
-# 侧边栏底部：数据源/Key/性能
-# ======================
-with st.sidebar:
-    st.markdown("---")
-    with st.expander("📁 数据源（固定文件夹）", expanded=False):
-        new_dir = st.text_input("数据文件夹路径", value=st.session_state.data_dir_path, help="可填本地或共享盘路径，例如 D:\\data 或 \\\\SERVER\\share")
-        if new_dir != st.session_state.data_dir_path:
-            st.session_state.data_dir_path = new_dir
-        os.makedirs(st.session_state.data_dir_path, exist_ok=True)
-
-        files2 = [f for f in os.listdir(st.session_state.data_dir_path) if f.lower().endswith(SUPPORT_EXTS)]
-        files2 = sorted(files2, key=lambda f: os.path.getmtime(os.path.join(st.session_state.data_dir_path, f)), reverse=True)
-
-        if files2:
-            pick = st.selectbox("选择已保存的数据文件", files2, index=0, key="pick_file_bottom")
-            if st.button("载入所选文件", key="btn_load_selected_bottom"):
-                try:
-                    path = os.path.join(st.session_state.data_dir_path, pick)
-                    st.session_state.df = _load_df(path)
-                    st.session_state.data_meta = {"filename": pick, "path": path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                    st.success(f"已载入：{pick}")
-                    st.experimental_rerun()
-                except Exception as e:
-                    st.error(f"载入失败：{e}")
-        else:
-            st.info("当前文件夹没有任何数据文件（csv/xlsx/xls）。")
-
-        new_file = st.file_uploader("上传新数据（保存进文件夹）", type=['csv', 'xlsx', 'xls'], key="uploader_new_bottom")
-        if new_file is not None:
-            try:
-                saved_path = _save_uploaded(new_file, st.session_state.data_dir_path)
-                st.session_state.df = _load_df(saved_path)
-                st.session_state.data_meta = {"filename": os.path.basename(saved_path), "path": saved_path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                st.success(f"已上传并载入：{os.path.basename(saved_path)}")
-                st.experimental_rerun()
-            except Exception as e:
-                st.error(f"上传/读取失败：{e}")
-
-        if st.session_state.get("df") is not None:
-            meta = st.session_state.get("data_meta", {})
-            st.success(
-                f"**{meta.get('filename','(未命名)')}**\n\n"
-                f"路径：{meta.get('path','')}\n\n"
-                f"载入时间：{meta.get('loaded_at','')}\n\n"
-                f"行数：{len(st.session_state.df)}"
-            )
-
-    # Key 状态（放最底）
-    st.caption(
-        f"🔑 Google Places：{'✅ 已读取' if GOOGLE_PLACES_KEY else '❌ 未设置'}  {_mask_key(GOOGLE_PLACES_KEY)}"
-    )
