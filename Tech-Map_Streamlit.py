@@ -556,7 +556,8 @@ with st.sidebar:
     radius_miles  = st.slider("半径（英里）", 5, 50, 20, 5)
     min_good      = st.number_input("圈内≥ 好维修工数量", 1, 10, 2, 1)
     only_show_units       = st.checkbox("只显示达标范围", value=True)
-    only_show_good_points = st.checkbox("只显示维修工点位", value=False)
+    only_show_good_points = st.checkbox("只显示好维修工（按上面的多选）", value=False)
+
 
     st.markdown("---")
     # 网上补充相关的筛选（数据源选择 + 过滤）
@@ -657,7 +658,17 @@ if 'unit_choice' in locals() and unit_choice != '全部':
     base_master = base_master[base_master[name_col] == unit_choice]
 base_master = base_master.copy()
 
-points_all  = df.dropna(subset=['Latitude','Longitude']).copy()
+# 用“已按州/等级/HVAC等筛过”的 filtered_base 参与统计
+points_all = filtered_base.dropna(subset=['Latitude','Longitude']).copy()
+
+# “好维修工” = 侧边栏 multiselect（good_levels）
+_selected_good_levels = [int(x) for x in (good_levels or [])]
+if _selected_good_levels:
+    points_good = points_all[points_all['Level'].isin(_selected_good_levels)].copy()
+else:
+    # 允许把多选清空时，视为没有好维修工
+    points_good = points_all.iloc[0:0].copy()
+
 
 R_EARTH_MI = 3958.7613
 def counts_balltree(centroids_df, pts_df, radius_mi):
@@ -692,8 +703,6 @@ try:
 except Exception:
     use_sklearn = False
 
-# “好维修工”定义：Level 1-6
-points_good = points_all[points_all['Level'].isin([1,2,3,4,5,6])]
 if use_sklearn:
     P_all = np.radians(points_all[['Latitude','Longitude']].to_numpy()) if len(points_all) else np.empty((0,2))
     P_good = np.radians(points_good[['Latitude','Longitude']].to_numpy()) if len(points_good) else np.empty((0,2))
@@ -1100,8 +1109,15 @@ if st.session_state.get("hvac_only", False):
 points = filtered.dropna(subset=['Latitude','Longitude']).copy()
 if show_only_new:
     points = points[points['Level'].eq(7)]
+# 应用“只看新增/只看好维修工”
+points = filtered.dropna(subset=['Latitude','Longitude']).copy()
+if show_only_new:
+    points = points[points['Level'].eq(7)]
+
+# ✅ 用侧边栏的 good_levels 来过滤地图点位，而不是写死 1..6
 if only_show_good_points:
-    points = points[points['Level'].isin([1,2,3,4,5,6])]
+    _sel_lvls = [int(x) for x in (good_levels or [])]
+    points = points[points['Level'].isin(_sel_lvls)] if _sel_lvls else points.iloc[0:0]
 
 # 命中集合（用于 🚩）
 def _contains_safe(s, q):
