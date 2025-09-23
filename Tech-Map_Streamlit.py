@@ -266,6 +266,31 @@ _US_STATES = {
     "NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC","PR"
 }
 
+def _smart_zip_from_text(s: str):
+    """优先匹配 '州缩写 + ZIP'，否则取最后一个5位数为 ZIP。对 pd.NA 安全。"""
+    # 先把各种空值都拦住：None / NaN / pd.NA / 空串
+    try:
+        import pandas as pd  # 已经有就不影响
+        if s is None or pd.isna(s):
+            return None
+    except Exception:
+        if s is None:
+            return None
+
+    s = str(s).strip()
+    if not s:
+        return None
+
+    # 先找形如 "MI 48219" / "MI, 48219"
+    m = re.search(r'\b([A-Z]{2})\s*,?\s*(\d{5})(?:-\d{4})?\b', s)
+    if m and m.group(1).upper() in _US_STATES:
+        return m.group(2)
+
+    # 否则取“最后一个”5位数
+    ms = list(re.finditer(r'\b(\d{5})(?:-\d{4})?\b', s))
+    return ms[-1].group(1) if ms else None
+
+
 @st.cache_data(show_spinner=False, ttl=3600)
 def geocode_address(addr: str, key: str | None):
     addr = (addr or "").strip()
@@ -278,21 +303,22 @@ def geocode_address(addr: str, key: str | None):
         lat = float(m.group(1)); lng = float(m.group(2))
         return {"lat": lat, "lng": lng, "formatted": f"{lat:.6f}, {lng:.6f}", "source": "coord"}
 
-    # ② ZIP
-    z = ZIP_RE.search(addr)
-    if z:
+       # ② ZIP（使用更智能的提取，避免把门牌号当 ZIP）
+    zip5 = _smart_zip_from_text(addr)
+    if zip5:
         try:
             import pgeocode
             nomi = pgeocode.Nominatim("us")
-            info = nomi.query_postal_code(z.group(1))
+            info = nomi.query_postal_code(zip5)
             if pd.notna(info.latitude) and pd.notna(info.longitude):
                 return {
                     "lat": float(info.latitude), "lng": float(info.longitude),
-                    "formatted": f"ZIP {z.group(1)}",
+                    "formatted": f"ZIP {zip5}",
                     "source": "zip"
                 }
         except Exception:
             pass
+
 
     # ③ Google
     if key:
@@ -376,8 +402,19 @@ lat_col = _pick_col(['Latitude', 'Lat', 'latitude', 'lat'])
 lon_col = _pick_col(['Longitude', 'Lon', 'Lng', 'longitude', 'lon', 'lng'])
 
 def _extract_zip_from_text(s):
-    m = re.search(r'\b(\d{5})(?:-\d{4})?\b', str(s))
-    return m.group(1) if m else np.nan
+    z = _smart_zip_from_text(s)
+    # 统一返回为缺失值（string dtype 友好）
+    try:
+        import pandas as pd
+        if z is None or pd.isna(z) or str(z).strip() == "":
+            return pd.NA
+    except Exception:
+        if z is None or str(z).strip() == "":
+            return np.nan
+    return z
+
+
+# 经纬度回填 ZIP
 
 # ZIP 回填经纬度（若没提供经纬度）
 if not lat_col or not lon_col:
@@ -439,6 +476,11 @@ def to_level(x):
     v = int(m.group(1))
     return v if 1 <= v <= 7 else np.nan  # 允许 1-7（7 = 网上新增）
 df['Level'] = df['Level'].apply(to_level)
+
+# 规范 Level：转为可空整数型，并限定 1..7，其他置为 NA
+df['Level'] = pd.to_numeric(df['Level'], errors='coerce').astype('Int64')
+df.loc[~df['Level'].between(1, 7), 'Level'] = pd.NA
+
 
 for need in ['Name', 'Address']:
     if need not in df.columns:
@@ -677,7 +719,7 @@ centroids_to_plot = (centroids_to_plot
 # ======================
 # 统计导出 + 网上补充（移到搜索行之前）
 # ======================
-st.markdown("---")
+
 unit_key = 'County' if geo_level.startswith("郡") else 'City'
 label_total = "统计的郡数" if unit_key == 'County' else "统计的城市数"
 label_yes   = "有维修工的郡" if unit_key == 'County' else "有维修工的城市"
@@ -692,7 +734,9 @@ empty_rate    = (empty_units / total_units) if total_units else 0
 left, mid, right, dl = st.columns([0.9, 0.9, 0.9, 1.1])
 with left:  st.metric(label_total, f"{total_units:,}")
 with mid:   st.metric(label_yes,   f"{covered_units:,}")
-with right: st.metric(label_no,    f"{empty_units:,}", f"{empty_rate:.1%} 空白率")
+with right:
+    st.metric(label_no, f"{empty_units:,}（{empty_rate:.1%} 空白率）")
+
 
 gaps = cm_units[~cm_units['meets']].copy()
 gaps['workers_count'] = gaps['good_in_radius'].astype(int)
@@ -1005,6 +1049,29 @@ def _s(val):
         pass
     return str(val)
 
+def _full_address_from_row(row):
+    def _clean(v):
+        try:
+            import pandas as pd
+            if v is None or pd.isna(v):
+                return ""
+        except Exception:
+            if v is None:
+                return ""
+        return str(v).strip()
+
+    addr = _clean(row.get('Address', ''))
+    if addr:
+        return addr
+
+    city  = _clean(row.get('City', ''))
+    state = _clean(row.get('State', ''))
+    zip5  = _clean(row.get('ZIP', ''))
+    parts = [p for p in (city, state, zip5) if p]
+    return ", ".join(parts) if parts else ""
+
+
+
 mask = pd.Series(True, index=df.index)
 if level_choice != '全部':
     mask &= (df['Level'] == level_choice)
@@ -1060,7 +1127,17 @@ search_active = bool(has_query) and (len(matched) > 0)
 # 地图绘制
 # ======================
 US_STATES_GEO_PATH = os.path.join(data_dir, "us_states.geojson")
-level_color = {1:'#2ecc71',2:'#FFD700',3:'#FF4D4F',4:'#FFC0CB',5:'#8A2BE2',6:'#000000',7:'#1E90FF'}
+# 统一颜色表（1–7）：1=绿, 2=金, 3=红, 4=粉, 5=紫, 6=黑, 7=蓝(网上补充)
+LEVEL_COLORS = {
+    1: '#2ecc71',
+    2: '#FFD700',
+    3: '#FF4D4F',
+    4: '#FFC0CB',
+    5: '#8A2BE2',
+    6: '#000000',
+    7: '#1E90FF',
+}
+
 
 prefer_canvas = st.session_state.get("perf_prefer_canvas", True)
 m = folium.Map(location=[37.8, -96.0], zoom_start=4, keyboard=False,
@@ -1129,17 +1206,27 @@ for _, r in centroids_to_plot.iterrows():
 
 # ---- 弹窗模板（更宽 + 每项单独一行）----
 POPUP_MAX_W = 520
-def make_worker_popup(name, level, state, zip_code, distance_text):
+# 替换你当前的 make_worker_popup 定义为下方版本
+def make_worker_popup(name, level, address=None, zip_code=None, distance_text="", **kwargs):
+    """
+    兼容旧调用：如果传了 state=... 也不报错；
+    优先用 address；没有就回退用 state。
+    """
+    # 兼容旧参数名
+    if not address:
+        address = kwargs.get("state", "")  # 让旧代码不崩
+
     html = f"""
     <div style="min-width:420px; font-size:13px; line-height:1.4; white-space:normal;">
       <div><b>名称：</b>{_s(name)}</div>
       <div><b>等级：</b>{_s(level)}</div>
-      <div><b>州(State)：</b>{_s(state)}</div>
+      <div><b>地址：</b>{_s(address)}</div>
       <div><b>ZIP：</b>{_s(zip_code)}</div>
       <div><b>距离：</b>{_s(distance_text)}</div>
     </div>
     """
     return folium.Popup(html, max_width=POPUP_MAX_W)
+
 
 # 距离/时间工具
 def haversine_miles(lat1, lng1, lat2, lng2):
@@ -1179,22 +1266,24 @@ def popup_distance_text(lat, lng, prefer_drive=False):
 
 if use_cluster and len(points) > 2000:
     clusters = {}
-    for lvl, color in level_color.items():
+    for lvl, col in sorted(LEVEL_COLORS.items()):
         clusters[lvl] = MarkerCluster(
             name=f"Level {lvl}",
             icon_create_function=f"""
             function(cluster) {{
               var count = cluster.getChildCount();
               return new L.DivIcon({{
-                html: '<div style="background:{color};opacity:0.85;border-radius:20px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;color:white;font-weight:600;border:2px solid white;">'+count+'</div>',
+                html: '<div style="background:{col};opacity:0.85;border-radius:20px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;color:white;font-weight:600;border:2px solid white;">'+count+'</div>',
                 className: 'marker-cluster', iconSize: new L.Point(36, 36)
               }});
             }}
             """
         ).add_to(workers_fg)
+    # …下面 add marker 时颜色也统一取 LEVEL_COLORS …
+
     for _, row in points.iterrows():
         lvl = int(row['Level']) if not pd.isna(row['Level']) else None
-        color = level_color.get(lvl, '#3388ff')
+        color = LEVEL_COLORS.get(lvl, '#3388ff')
         distance_text = popup_distance_text(row['Latitude'], row['Longitude'], prefer_drive=False)
         popup_obj = make_worker_popup(
             name=row.get('Name',''),
@@ -1211,15 +1300,15 @@ if use_cluster and len(points) > 2000:
 else:
     for _, row in points.iterrows():
         lvl = int(row['Level']) if not pd.isna(row['Level']) else None
-        color = level_color.get(lvl, '#3388ff')
+        color = LEVEL_COLORS.get(lvl, '#3388ff')
         distance_text = popup_distance_text(row['Latitude'], row['Longitude'], prefer_drive=False)
         popup_obj = make_worker_popup(
-            name=row.get('Name',''),
-            level=row.get('Level',''),
-            state=row.get('State',''),
-            zip_code=row.get('ZIP',''),
-            distance_text=distance_text
-        )
+    name=row.get('Name',''),
+    level=row.get('Level',''),
+    address=_full_address_from_row(row),
+    zip_code=row.get('ZIP',''),
+    distance_text=distance_text
+)
         folium.CircleMarker(
             location=[row['Latitude'], row['Longitude']],
             radius=6, color=color, fill=True, fill_color=color, fill_opacity=0.9,
@@ -1233,7 +1322,7 @@ if search_active and len(matched) > 0:
         popup_obj = make_worker_popup(
             name=r.get('Name',''),
             level=r.get('Level',''),
-            state=r.get('State',''),
+            address=_full_address_from_row(r),
             zip_code=r.get('ZIP',''),
             distance_text=dist_txt
         )
@@ -1262,7 +1351,8 @@ if "_web_new_layer" in st.session_state:
     for r in st.session_state.pop("_web_new_layer"):
         name = _s(r.get("Name")); addr = _s(r.get("Address")); rating = _s(r.get("Rating"))
         dist_txt = popup_distance_text(r.get("Latitude"), r.get("Longitude"), prefer_drive=False)
-        popup_obj = make_worker_popup(name, r.get("Level","7"), r.get("State",""), r.get("ZIP",""), dist_txt)
+        popup_obj = make_worker_popup(name, r.get("Level","7"), _s(r.get("Address","")), r.get("ZIP",""), dist_txt)
+
         folium.Marker(
             location=[float(r["Latitude"]), float(r["Longitude"])],
             icon=blue_wrench_icon(),
@@ -1291,9 +1381,16 @@ def fit_initial_or_search(map_obj, nat_bnds, state_bnds, matched_df, search_acti
 fit_initial_or_search(m, CONUS_BOUNDS, selected_bounds, matched if 'matched' in locals() else None, search_active)
 
 # 右上角图例
-lvl_order = [1,2,3,4,5,6,7]
+lvl_order = sorted(LEVEL_COLORS.keys())
 lvl_counts = {lvl: int(points['Level'].eq(lvl).sum()) for lvl in lvl_order}
-total_points = int(points.shape[0])
+
+rows_html = "".join([
+    f"<span><span style='display:inline-block;width:10px;height:10px;background:{LEVEL_COLORS[lvl]};"
+    f"margin-right:6px;border-radius:2px;{'border:1px solid #eee;' if lvl==6 else ''}'></span>{lvl}</span>"
+    f"<span>{lvl_counts.get(lvl,0)}</span>"
+    for lvl in lvl_order
+])
+
 legend_html = f"""
 <div style="
   position: fixed; top: 10px; right: 12px; z-index: 9999;
@@ -1303,20 +1400,15 @@ legend_html = f"""
 ">
   <div style="font-weight:600; margin-bottom:4px;">等级颜色</div>
   <div style="display:grid; grid-template-columns: auto auto; grid-column-gap:8px; grid-row-gap:4px; align-items:center;">
-    <span><span style='display:inline-block;width:10px;height:10px;background:#2ecc71;margin-right:6px;border-radius:2px;'></span>1</span><span>{lvl_counts.get(1,0)}</span>
-    <span><span style='display:inline-block;width:10px;height:10px;background:#FFD700;margin-right:6px;border-radius:2px;'></span>2</span><span>{lvl_counts.get(2,0)}</span>
-    <span><span style='display:inline-block;width:10px;height:10px;background:#FF4D4F;margin-right:6px;border-radius:2px;'></span>3</span><span>{lvl_counts.get(3,0)}</span>
-    <span><span style='display:inline-block;width:10px;height:10px;background:#FFC0CB;margin-right:6px;border-radius:2px;'></span>4</span><span>{lvl_counts.get(4,0)}</span>
-    <span><span style='display:inline-block;width:10px;height:10px;background:#8A2BE2;margin-right:6px;border-radius:2px;'></span>5</span><span>{lvl_counts.get(5,0)}</span>
-    <span><span style='display:inline-block;width:10px;height:10px;background:#000;margin-right:6px;border-radius:2px;border:1px solid #eee;'></span>6</span><span>{lvl_counts.get(6,0)}</span>
-    <span><span style='display:inline-block;width:10px;height:10px;background:#1E90FF;margin-right:6px;border-radius:2px;'></span>7</span><span>{lvl_counts.get(7,0)}</span>
+    {rows_html}
   </div>
   <div style="margin-top:6px; border-top:1px dashed #e5e7eb; padding-top:6px; font-weight:600;">
-    总数：{total_points}
+    总数：{int(points.shape[0])}
   </div>
 </div>
 """
 m.get_root().html.add_child(folium.Element(legend_html))
+
 
 # 图层开关
 folium.LayerControl(collapsed=True, position='topleft').add_to(m)
