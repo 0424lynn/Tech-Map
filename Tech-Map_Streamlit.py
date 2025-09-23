@@ -149,12 +149,14 @@ div[data-testid="stIFrame"]{ margin-top: .1rem!important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ======================
 # 数据目录（固定文件夹）
 # ======================
-DEFAULT_WIN = r"C:\Users\jeffy\chris\tech map"
-DATA_DIR_DEFAULT = DEFAULT_WIN if os.path.exists(DEFAULT_WIN) else os.path.join(os.getcwd(), "data")
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_LOCAL = r"C:\Users\jeffy\chris\tech map"
+# 本机有就用本机路径；云端（没有 C:）则使用仓库内的 ./data
+DATA_DIR_DEFAULT = DEFAULT_LOCAL if os.path.exists(DEFAULT_LOCAL) else os.path.join(APP_DIR, "data")
 os.makedirs(DATA_DIR_DEFAULT, exist_ok=True)
+
 SUPPORT_EXTS = (".csv", ".xlsx", ".xls")
 
 if "data_dir_path" not in st.session_state:
