@@ -15,6 +15,13 @@ from folium.plugins import MarkerCluster
 # ======================
 st.set_page_config(page_title="Tech Map", layout="wide")
 USE_STATIC_MAP = True  # Folium 用原生 HTML 渲染，更快
+# ---- 兼容 rerun（新：st.rerun；旧：st.experimental_rerun）----
+def _safe_rerun():
+    try:
+        st.rerun()
+    except AttributeError:
+        st.experimental_rerun()
+
 
 # ---------- 正则 ----------
 HVAC_PAT_STR = (
@@ -104,9 +111,11 @@ st.markdown("""
 <style>
 /* remove chrome */
 div[data-testid="stDecoration"]{display:none!important;}
-header[data-testid="stHeader"]{height:0!important;visibility:hidden!important;}
-footer{display:none!important;}
-:root, .stApp { --top-toolbar-height:0px !important; }
+/* 保留顶部工具条，否则侧边栏折叠/展开按钮会消失 */
+header[data-testid="stHeader"]{ height:2.4rem !important; visibility:visible !important; }
+:root, .stApp { --top-toolbar-height:2.4rem !important; }
+button[title="Toggle sidebar"]{ opacity:1 !important; pointer-events:auto !important; }
+
 
 /* layout tighten */
 .stAppViewContainer{ padding-top:0!important; }
@@ -150,17 +159,24 @@ div[data-testid="stIFrame"]{ margin-top: .1rem!important; }
 """, unsafe_allow_html=True)
 
 # ======================
-# 数据目录（固定文件夹）
+# 数据目录（本机优先，云端用仓库 data/；也支持环境变量覆盖）
 # ======================
-DEFAULT_WIN = r"C:\Users\jeffy\chris\tech map"
-DATA_DIR_DEFAULT = DEFAULT_WIN if os.path.exists(DEFAULT_WIN) else os.path.join(os.getcwd(), "data")
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+LOCAL_DIR = r"C:\Users\jeffy\chris\tech map"  # 本机跑时可用
+DATA_DIR_ENV = os.getenv("TECH_MAP_DATA_DIR")
+
+DATA_DIR_DEFAULT = DATA_DIR_ENV or (LOCAL_DIR if os.path.exists(LOCAL_DIR) else os.path.join(APP_DIR, "data"))
 os.makedirs(DATA_DIR_DEFAULT, exist_ok=True)
+
 SUPPORT_EXTS = (".csv", ".xlsx", ".xls")
 
 if "data_dir_path" not in st.session_state:
     st.session_state.data_dir_path = DATA_DIR_DEFAULT
+
 data_dir = st.session_state.data_dir_path
 os.makedirs(data_dir, exist_ok=True)
+
 
 def _list_files():
     try:
@@ -207,10 +223,17 @@ if st.session_state.df is None and _files:
     except Exception as e:
         st.error(f"读取 {_files[0]} 失败：{e}")
 
-df = st.session_state.get("df")
+
+# --- 重要：供全局使用的 df 句柄 ---
+df = st.session_state.get("df", None)
+
+# >>> 新增：如果还没加载数据，立刻停止，避免后面 df.columns 报错
 if df is None:
     st.warning("尚未加载任何数据。请到侧边栏最底部【📁 数据源（固定文件夹）】选择或上传文件。")
     st.stop()
+
+
+
 
 # ======================
 # 缓存 / 参考表
@@ -382,16 +405,18 @@ def _on_cust_addr_change():
 # ======================
 # 数据清洗/回填
 # ======================
-df.columns = [str(c).strip() for c in df.columns]
-alias_map = {}
-for c in list(df.columns):
-    lc = c.lower()
-    if lc in {"lat","latitude","纬度","y","y_coord","ycoordinate","lat_dd","latitudes","lattitude"}:
-        alias_map[c] = "Latitude"
-    if lc in {"lon","lng","long","longitude","经度","x","x_coord","xcoordinate","lon_dd","longitudes","longtitude"}:
-        alias_map[c] = "Longitude"
-if alias_map:
-    df.rename(columns=alias_map, inplace=True)
+if df is not None:                     # ← 新增
+    df.columns = [str(c).strip() for c in df.columns]
+    alias_map = {}
+    for c in list(df.columns):
+        lc = c.lower()
+        if lc in {"lat","latitude","纬度","y","y_coord","ycoordinate","lat_dd","latitudes","lattitude"}:
+            alias_map[c] = "Latitude"
+        if lc in {"lon","lng","long","longitude","经度","x","x_coord","xcoordinate","lon_dd","longitudes","longtitude"}:
+            alias_map[c] = "Longitude"
+    if alias_map:
+        df.rename(columns=alias_map, inplace=True)
+
 
 def _pick_col(cols):
     for c in cols:
@@ -556,7 +581,8 @@ with st.sidebar:
     radius_miles  = st.slider("半径（英里）", 5, 50, 20, 5)
     min_good      = st.number_input("圈内≥ 好维修工数量", 1, 10, 2, 1)
     only_show_units       = st.checkbox("只显示达标范围", value=True)
-    only_show_good_points = st.checkbox("只显示维修工点位", value=False)
+    only_show_good_points = st.checkbox("只显示好维修工（按上面的多选）", value=False)
+
 
     st.markdown("---")
     # 网上补充相关的筛选（数据源选择 + 过滤）
@@ -573,7 +599,10 @@ with st.sidebar:
         st.checkbox("Canvas 渲染矢量", key="perf_prefer_canvas", value=st.session_state.get("perf_prefer_canvas", True))
         st.slider("最多渲染范围数（郡/城市圈）", 200, 5000, int(st.session_state.get("perf_max_units", 1500)), 100, key="perf_max_units")
 
-    # 侧边栏底部：数据源/Key
+    
+    st.caption(f"🔑 Google Places：{'✅ 已读取' if GOOGLE_PLACES_KEY else '❌ 未设置'}  {_mask_key(GOOGLE_PLACES_KEY)}")
+
+with st.sidebar:
     st.markdown("---")
     with st.expander("📁 数据源（固定文件夹）", expanded=False):
         new_dir = st.text_input("数据文件夹路径", value=st.session_state.data_dir_path)
@@ -592,7 +621,7 @@ with st.sidebar:
                     st.session_state.df = _load_df(path)
                     st.session_state.data_meta = {"filename": pick, "path": path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
                     st.success(f"已载入：{pick}")
-                    st.experimental_rerun()
+                    _safe_rerun()
                 except Exception as e:
                     st.error(f"载入失败：{e}")
         else:
@@ -605,7 +634,7 @@ with st.sidebar:
                 st.session_state.df = _load_df(saved_path)
                 st.session_state.data_meta = {"filename": os.path.basename(saved_path), "path": saved_path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
                 st.success(f"已上传并载入：{os.path.basename(saved_path)}")
-                st.experimental_rerun()
+                _safe_rerun()
             except Exception as e:
                 st.error(f"上传/读取失败：{e}")
 
@@ -617,8 +646,7 @@ with st.sidebar:
                 f"载入时间：{meta.get('loaded_at','')}\n\n"
                 f"行数：{len(st.session_state.df)}"
             )
-
-    st.caption(f"🔑 Google Places：{'✅ 已读取' if GOOGLE_PLACES_KEY else '❌ 未设置'}  {_mask_key(GOOGLE_PLACES_KEY)}")
+          
 
 # ======================
 # 先计算统计圈（为了把“统计 + 网上补充”移到前面显示）
@@ -657,7 +685,17 @@ if 'unit_choice' in locals() and unit_choice != '全部':
     base_master = base_master[base_master[name_col] == unit_choice]
 base_master = base_master.copy()
 
-points_all  = df.dropna(subset=['Latitude','Longitude']).copy()
+# 用“已按州/等级/HVAC等筛过”的 filtered_base 参与统计
+points_all = filtered_base.dropna(subset=['Latitude','Longitude']).copy()
+
+# “好维修工” = 侧边栏 multiselect（good_levels）
+_selected_good_levels = [int(x) for x in (good_levels or [])]
+if _selected_good_levels:
+    points_good = points_all[points_all['Level'].isin(_selected_good_levels)].copy()
+else:
+    # 允许把多选清空时，视为没有好维修工
+    points_good = points_all.iloc[0:0].copy()
+
 
 R_EARTH_MI = 3958.7613
 def counts_balltree(centroids_df, pts_df, radius_mi):
@@ -692,8 +730,6 @@ try:
 except Exception:
     use_sklearn = False
 
-# “好维修工”定义：Level 1-6
-points_good = points_all[points_all['Level'].isin([1,2,3,4,5,6])]
 if use_sklearn:
     P_all = np.radians(points_all[['Latitude','Longitude']].to_numpy()) if len(points_all) else np.empty((0,2))
     P_good = np.radians(points_good[['Latitude','Longitude']].to_numpy()) if len(points_good) else np.empty((0,2))
@@ -1016,7 +1052,8 @@ with st.expander("🌐 网上补充数据", expanded=False):
                     if c not in online_df.columns: online_df[c] = pd.NA
                 st.session_state.df = pd.concat([st.session_state.df, online_df[cols]], ignore_index=True)
                 st.toast("已把网上新增点（Level=7）合并到数据集中。")
-                st.experimental_rerun()
+                _safe_rerun()
+
 
 # ======================
 # 搜索行（对调后：现在紧贴地图上方）
@@ -1100,8 +1137,11 @@ if st.session_state.get("hvac_only", False):
 points = filtered.dropna(subset=['Latitude','Longitude']).copy()
 if show_only_new:
     points = points[points['Level'].eq(7)]
+
+# ✅ 用侧边栏的 good_levels 来过滤地图点位，而不是写死 1..6
 if only_show_good_points:
-    points = points[points['Level'].isin([1,2,3,4,5,6])]
+    _sel_lvls = [int(x) for x in (good_levels or [])]
+    points = points[points['Level'].isin(_sel_lvls)] if _sel_lvls else points.iloc[0:0]
 
 # 命中集合（用于 🚩）
 def _contains_safe(s, q):
@@ -1413,6 +1453,10 @@ m.get_root().html.add_child(folium.Element(legend_html))
 # 图层开关
 folium.LayerControl(collapsed=True, position='topleft').add_to(m)
 
+# 渲染地图（靠上显示）
+if USE_STATIC_MAP:
+    from streamlit.components.v1 import html
+    html(m.get_root().render(), height=760)
 # 渲染地图（靠上显示）
 if USE_STATIC_MAP:
     from streamlit.components.v1 import html
