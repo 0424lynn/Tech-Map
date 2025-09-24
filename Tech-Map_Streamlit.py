@@ -111,9 +111,11 @@ st.markdown("""
 <style>
 /* remove chrome */
 div[data-testid="stDecoration"]{display:none!important;}
-header[data-testid="stHeader"]{height:0!important;visibility:hidden!important;}
-footer{display:none!important;}
-:root, .stApp { --top-toolbar-height:0px !important; }
+/* 保留顶部工具条，否则侧边栏折叠/展开按钮会消失 */
+header[data-testid="stHeader"]{ height:2.4rem !important; visibility:visible !important; }
+:root, .stApp { --top-toolbar-height:2.4rem !important; }
+button[title="Toggle sidebar"]{ opacity:1 !important; pointer-events:auto !important; }
+
 
 /* layout tighten */
 .stAppViewContainer{ padding-top:0!important; }
@@ -221,55 +223,9 @@ if st.session_state.df is None and _files:
     except Exception as e:
         st.error(f"读取 {_files[0]} 失败：{e}")
 
-df = st.session_state.get("df")
-# 侧边栏底部：数据源/Key
-st.markdown("---")
-with st.expander("📁 数据源（固定文件夹）", expanded=False):
-        new_dir = st.text_input("数据文件夹路径", value=st.session_state.data_dir_path)
-        if new_dir != st.session_state.data_dir_path:
-            st.session_state.data_dir_path = new_dir
-        os.makedirs(st.session_state.data_dir_path, exist_ok=True)
+# --- 重要：供全局使用的 df 句柄 ---
+df = st.session_state.get("df", None)   # ← 新增
 
-        files2 = [f for f in os.listdir(st.session_state.data_dir_path) if f.lower().endswith(SUPPORT_EXTS)]
-        files2 = sorted(files2, key=lambda f: os.path.getmtime(os.path.join(st.session_state.data_dir_path, f)), reverse=True)
-
-        if files2:
-            pick = st.selectbox("选择已保存的数据文件", files2, index=0, key="pick_file_bottom")
-            if st.button("载入所选文件", key="btn_load_selected_bottom"):
-                try:
-                    path = os.path.join(st.session_state.data_dir_path, pick)
-                    st.session_state.df = _load_df(path)
-                    st.session_state.data_meta = {"filename": pick, "path": path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                    st.success(f"已载入：{pick}")
-                    _safe_rerun()
-                except Exception as e:
-                    st.error(f"载入失败：{e}")
-        else:
-            st.info("当前文件夹没有任何数据文件（csv/xlsx/xls）。")
-
-        new_file = st.file_uploader("上传新数据（保存进文件夹）", type=['csv', 'xlsx', 'xls'], key="uploader_new_bottom")
-        if new_file is not None:
-            try:
-                saved_path = _save_uploaded(new_file, st.session_state.data_dir_path)
-                st.session_state.df = _load_df(saved_path)
-                st.session_state.data_meta = {"filename": os.path.basename(saved_path), "path": saved_path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                st.success(f"已上传并载入：{os.path.basename(saved_path)}")
-                _safe_rerun()
-            except Exception as e:
-                st.error(f"上传/读取失败：{e}")
-
-        if st.session_state.get("df") is not None:
-            meta = st.session_state.get("data_meta", {})
-            st.success(
-                f"**{meta.get('filename','(未命名)')}**\n\n"
-                f"路径：{meta.get('path','')}\n\n"
-                f"载入时间：{meta.get('loaded_at','')}\n\n"
-                f"行数：{len(st.session_state.df)}"
-            )
-
-if df is None:
-    st.warning("尚未加载任何数据。请到侧边栏最底部【📁 数据源（固定文件夹）】选择或上传文件。")
-    st.stop()
 
 # ======================
 # 缓存 / 参考表
@@ -441,6 +397,17 @@ def _on_cust_addr_change():
 # ======================
 # 数据清洗/回填
 # ======================
+if df is not None:                     # ← 新增
+    df.columns = [str(c).strip() for c in df.columns]
+    alias_map = {}
+    for c in list(df.columns):
+        lc = c.lower()
+        if lc in {"lat","latitude","纬度","y","y_coord","ycoordinate","lat_dd","latitudes","lattitude"}:
+            alias_map[c] = "Latitude"
+        if lc in {"lon","lng","long","longitude","经度","x","x_coord","xcoordinate","lon_dd","longitudes","longtitude"}:
+            alias_map[c] = "Longitude"
+    if alias_map:
+        df.rename(columns=alias_map, inplace=True)
 df.columns = [str(c).strip() for c in df.columns]
 alias_map = {}
 for c in list(df.columns):
@@ -636,6 +603,56 @@ with st.sidebar:
     
     st.caption(f"🔑 Google Places：{'✅ 已读取' if GOOGLE_PLACES_KEY else '❌ 未设置'}  {_mask_key(GOOGLE_PLACES_KEY)}")
 
+with st.sidebar:
+    st.markdown("---")
+    with st.expander("📁 数据源（固定文件夹）", expanded=False):
+        new_dir = st.text_input("数据文件夹路径", value=st.session_state.data_dir_path)
+        if new_dir != st.session_state.data_dir_path:
+            st.session_state.data_dir_path = new_dir
+        os.makedirs(st.session_state.data_dir_path, exist_ok=True)
+
+        files2 = [f for f in os.listdir(st.session_state.data_dir_path) if f.lower().endswith(SUPPORT_EXTS)]
+        files2 = sorted(files2, key=lambda f: os.path.getmtime(os.path.join(st.session_state.data_dir_path, f)), reverse=True)
+
+        if files2:
+            pick = st.selectbox("选择已保存的数据文件", files2, index=0, key="pick_file_bottom")
+            if st.button("载入所选文件", key="btn_load_selected_bottom"):
+                try:
+                    path = os.path.join(st.session_state.data_dir_path, pick)
+                    st.session_state.df = _load_df(path)
+                    st.session_state.data_meta = {"filename": pick, "path": path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                    st.success(f"已载入：{pick}")
+                    _safe_rerun()
+                except Exception as e:
+                    st.error(f"载入失败：{e}")
+        else:
+            st.info("当前文件夹没有任何数据文件（csv/xlsx/xls）。")
+
+        new_file = st.file_uploader("上传新数据（保存进文件夹）", type=['csv', 'xlsx', 'xls'], key="uploader_new_bottom")
+        if new_file is not None:
+            try:
+                saved_path = _save_uploaded(new_file, st.session_state.data_dir_path)
+                st.session_state.df = _load_df(saved_path)
+                st.session_state.data_meta = {"filename": os.path.basename(saved_path), "path": saved_path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                st.success(f"已上传并载入：{os.path.basename(saved_path)}")
+                _safe_rerun()
+            except Exception as e:
+                st.error(f"上传/读取失败：{e}")
+
+        if st.session_state.get("df") is not None:
+            meta = st.session_state.get("data_meta", {})
+            st.success(
+                f"**{meta.get('filename','(未命名)')}**\n\n"
+                f"路径：{meta.get('path','')}\n\n"
+                f"载入时间：{meta.get('loaded_at','')}\n\n"
+                f"行数：{len(st.session_state.df)}"
+            )
+          
+
+
+if df is None:
+    st.warning("尚未加载任何数据。请到侧边栏最底部【📁 数据源（固定文件夹）】选择或上传文件。")
+    st.stop()
 # ======================
 # 先计算统计圈（为了把“统计 + 网上补充”移到前面显示）
 # ======================
