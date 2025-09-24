@@ -45,11 +45,12 @@ HVAC_RE  = re.compile(HVAC_PAT_STR,  re.IGNORECASE)
 BLACK_RE = re.compile(BLACK_PAT_STR, re.IGNORECASE)
 
 # ---------- 图标 ----------
+# “新增维修工”改为棕色的圆点（保留原函数名以避免改调用处）
 def blue_wrench_icon(size_px: int = 24):
     return folium.DivIcon(
         html=f"""
-        <div style="filter: drop-shadow(0 0 2px rgba(0,0,0,.35));">
-          <span style="font-size:{size_px}px; line-height:1;">🔧</span>
+        <div style="filter: drop-shadow(0 0 2px rgba(0,0,0,.35)); width:{size_px}px; height:{size_px}px; display:flex; align-items:center; justify-content:center;">
+          <span style="font-size:{size_px}px; line-height:1;">🟤</span>
         </div>
         """,
         icon_size=(size_px, size_px),
@@ -110,7 +111,7 @@ st.markdown("""
 div[data-testid="stDecoration"]{display:none!important;}
 header[data-testid="stHeader"]{ height:2.4rem !important; visibility:visible !important; }
 :root, .stApp { --top-toolbar-height:2.4rem !important; }
-button[title="Toggle sidebar"]{ opacity:1 !important; pointer-events:auto !important; }
+button[title="Toggle sidebar"]{ opacity:1 !important; pointer-events:auto !重要; }
 
 .stAppViewContainer{ padding-top:0!important; }
 .main .block-container{ padding-top:.1rem!important; margin-top:0!important; }
@@ -208,8 +209,52 @@ if st.session_state.df is None and _files:
 
 df = st.session_state.get("df", None)
 if df is None:
-    st.warning("尚未加载任何数据。请到侧边栏最底部【📁 数据源（固定文件夹）】选择或上传文件。")
+    # 让侧边栏在“无数据”时也能出现上传/选择入口
+    with st.sidebar:
+        st.markdown("---")
+        with st.expander("📁 数据源（固定文件夹）", expanded=True):
+            new_dir = st.text_input("数据文件夹路径", value=st.session_state.data_dir_path)
+            if new_dir != st.session_state.data_dir_path:
+                st.session_state.data_dir_path = new_dir
+            os.makedirs(st.session_state.data_dir_path, exist_ok=True)
+
+            files2 = [f for f in os.listdir(st.session_state.data_dir_path) if f.lower().endswith(SUPPORT_EXTS)]
+            files2 = sorted(files2, key=lambda f: os.path.getmtime(os.path.join(st.session_state.data_dir_path, f)), reverse=True)
+
+            if files2:
+                pick = st.selectbox("选择已保存的数据文件", files2, index=0)
+                if st.button("载入所选文件"):
+                    try:
+                        path = os.path.join(st.session_state.data_dir_path, pick)
+                        st.session_state.df = _load_df(path)
+                        st.session_state.data_meta = {
+                            "filename": pick,
+                            "path": path,
+                            "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                        st.success(f"已载入：{pick}")
+                        _safe_rerun()
+                    except Exception as e:
+                        st.error(f"载入失败：{e}")
+
+            new_file = st.file_uploader("上传新数据（保存进文件夹）", type=['csv','xlsx','xls'])
+            if new_file is not None:
+                try:
+                    saved_path = _save_uploaded(new_file, st.session_state.data_dir_path)
+                    st.session_state.df = _load_df(saved_path)
+                    st.session_state.data_meta = {
+                        "filename": os.path.basename(saved_path),
+                        "path": saved_path,
+                        "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    st.success(f"已上传并载入：{os.path.basename(saved_path)}")
+                    _safe_rerun()
+                except Exception as e:
+                    st.error(f"上传/读取失败：{e}")
+
+    st.warning("尚未加载任何数据。请在左侧【📁 数据源（固定文件夹）】选择或上传文件。")
     st.stop()
+
 
 # ======================
 # 缓存 / 参考表
@@ -255,7 +300,6 @@ def load_us_states_geojson_cached(geojson_path):
     return data
 
 # ---- 更稳的地址解析 ----
-ZIP_RE = re.compile(r'\b(\d{5})(?:-\d{4})?\b')
 LATLNG_RE = re.compile(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$')
 _US_STATES = {
     "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS",
@@ -288,7 +332,6 @@ def geocode_address(addr: str, key: str | None):
     if m:
         lat = float(m.group(1)); lng = float(m.group(2))
         return {"lat": lat, "lng": lng, "formatted": f"{lat:.6f}, {lng:.6f}", "source": "coord"}
-
     zip5 = _smart_zip_from_text(addr)
     if zip5:
         try:
@@ -303,7 +346,6 @@ def geocode_address(addr: str, key: str | None):
                 }
         except Exception:
             pass
-
     if key:
         try:
             r = requests.get(
@@ -321,7 +363,6 @@ def geocode_address(addr: str, key: str | None):
                 }
         except Exception:
             pass
-
     headers = {"User-Agent": "tech-map/1.0 (contact: support@example.com)"}
     osm_params = {"q": addr, "format": "json", "limit": 1, "addressdetails": 1, "countrycodes": "us", "accept-language": "en"}
     for url, src in [("https://nominatim.openstreetmap.org/search", "osm"),
@@ -1106,7 +1147,16 @@ search_active = bool(has_query) and (len(matched) > 0)
 # 地图绘制
 # ======================
 US_STATES_GEO_PATH = os.path.join(data_dir, "us_states.geojson")
-LEVEL_COLORS = {1:'#2ecc71', 2:'#FFD700', 3:'#FF4D4F', 4:'#FFC0CB', 5:'#8A2BE2', 6:'#000000', 7:'#1E90FF'}
+# 校准后的颜色映射（严格按等级）
+LEVEL_COLORS = {
+    1:'#2ecc71',  # 绿
+    2:'#FFD700',  # 金
+    3:'#FF4D4F',  # 红
+    4:'#FFC0CB',  # 粉
+    5:'#8A2BE2',  # 紫
+    6:'#000000',  # 黑
+    7:'#1E90FF',  # 蓝（数据集内 Level=7）
+}
 
 prefer_canvas = st.session_state.get("perf_prefer_canvas", True)
 m = folium.Map(location=[37.8, -96.0], zoom_start=4, keyboard=False,
@@ -1158,25 +1208,16 @@ if states_geo:
 radius_m = radius_miles * 1609.34
 unit_fg = folium.FeatureGroup(name=layer_name, show=True).add_to(m)
 
-def preview_zip(zlist, max_show=8):
-    if zlist is None or (isinstance(zlist, float) and np.isnan(zlist)): return "0"
-    zlist = list(zlist)
-    if len(zlist) <= max_show:
-        return ",".join(zlist)
-    else:
-        return ",".join(zlist[:max_show]) + f"... (+{len(zlist)-max_show})"
-
+# 不再在圈提示里展示 ZIP 相关信息
 for _, r in centroids_to_plot.iterrows():
     ring_color = '#1e88e5' if bool(r['meets']) else '#9e9e9e'
     tip = (f"{'County' if geo_level.startswith('郡') else 'City'}: {r.get(name_col)} "
            f"({r.get('State')}) | 好工: {int(r['good_in_radius'])} / 总: {int(r['all_in_radius'])}")
-    if geo_level.startswith("郡") and 'ZIP_count' in r and 'ZIPs' in r:
-        tip += f" | ZIP数: {int(r['ZIP_count'])} | 示例: {preview_zip(r['ZIPs'])}"
     folium.Circle(location=[r['cLat'], r['cLng']], radius=radius_m,
                   color=ring_color, weight=1.6, fill=True, fill_opacity=0.05,
                   tooltip=tip).add_to(unit_fg)
 
-# ---- 弹窗模板（含联系人/邮箱/电话/备注）----
+# ---- 弹窗模板（按要求：不显示 ZIP；距离放在备注后；冷/热图标放大）----
 POPUP_MAX_W = 520
 def make_worker_popup(
     name, level, address=None, zip_code=None, distance_text="",
@@ -1190,19 +1231,23 @@ def make_worker_popup(
         except Exception:
             if v is None: return False
         return str(v).strip() != ""
-    icons = (" 🔧" if bool(is_cold) else "") + (" 🔥" if bool(is_hot) else "")
+    # 放大冷/热图标（保持原符号）
+    icons_html = ""
+    if bool(is_cold): icons_html += "<span style='font-size:18px;line-height:1'>🔧</span>"
+    if bool(is_hot):  icons_html += "<span style='font-size:18px;line-height:1'>🔥</span>"
+
     contact_html = f"<div><b>联系人：</b>{_s(contact)}</div>" if _has(contact) else ""
     phone_html   = f"<div><b>电话：</b>{_s(phone)}</div>"     if _has(phone)   else ""
     email_html   = f'<div><b>邮箱：</b><a href="mailto:{_s(email)}" target="_blank">{_s(email)}</a></div>' if _has(email) else ""
     note_html    = f"<div><b>备注：</b>{_s(note)}</div>" if _has(note) else ""
+
     html = f"""
     <div style="min-width:420px; font-size:13px; line-height:1.4; white-space:normal;">
-      <div><b>名称：</b>{_s(name)}{icons}</div>
+      <div><b>名称：</b>{_s(name)} {icons_html}</div>
       <div><b>等级：</b>{_s(level)}</div>
       <div><b>地址：</b>{_s(address)}</div>
-      <div><b>ZIP：</b>{_s(zip_code)}</div>
-      <div><b>距离：</b>{_s(distance_text)}</div>
       {contact_html}{phone_html}{email_html}{note_html}
+      <div><b>距离：</b>{_s(distance_text)}</div>
     </div>
     """
     return folium.Popup(html, max_width=POPUP_MAX_W)
@@ -1239,6 +1284,13 @@ def popup_distance_text(lat, lng, prefer_drive=False):
             return f"{drive[0]:.1f} mi · {int(round(drive[1]))} min"
     return f"{dline:.1f} mi（直线）"
 
+# ====== 名称包含 INHOUSE-TECH 的样式：蓝色 + 更大 ======
+def _style_for_row(row, base_color):
+    name = str(row.get('Name',''))
+    if "INHOUSE-TECH" in name.upper():
+        return "#1E90FF", 10  # 更大半径
+    return base_color, 6
+
 # 点位层（聚合/非聚合）
 workers_fg = folium.FeatureGroup(name="维修工点位", show=True).add_to(m)
 use_cluster = st.session_state.get("perf_use_cluster", True)
@@ -1260,14 +1312,14 @@ if use_cluster and len(points) > 2000:
         ).add_to(workers_fg)
     for _, row in points.iterrows():
         lvl = int(row['Level']) if not pd.isna(row['Level']) else None
-        color = LEVEL_COLORS.get(lvl, '#3388ff')
+        base_color = LEVEL_COLORS.get(lvl, '#3388ff')
+        color, radius = _style_for_row(row, base_color)
         distance_text = popup_distance_text(row['Latitude'], row['Longitude'], prefer_drive=False)
-        icons = (" 🔧" if bool(row.get('IsColdFlag')) else "") + (" 🔥" if bool(row.get('IsHotFlag')) else "")
         popup_obj = make_worker_popup(
             name=row.get('Name',''),
             level=row.get('Level',''),
             address=_full_address_from_row(row),
-            zip_code=row.get('ZIP',''),
+            zip_code=None,  # ZIP 不显示
             distance_text=distance_text,
             contact=row.get('Contact'),
             email=row.get('Email'),
@@ -1278,19 +1330,20 @@ if use_cluster and len(points) > 2000:
         )
         folium.CircleMarker(
             location=[row['Latitude'], row['Longitude']],
-            radius=6, color=color, fill=True, fill_color=color, fill_opacity=0.9,
-            popup=popup_obj, tooltip=f"{_s(row.get('Name',''))}{icons}"
+            radius=radius, color=color, fill=True, fill_color=color, fill_opacity=0.9,
+            popup=popup_obj
         ).add_to(clusters.get(lvl, workers_fg))
 else:
     for _, row in points.iterrows():
         lvl = int(row['Level']) if not pd.isna(row['Level']) else None
-        color = LEVEL_COLORS.get(lvl, '#3388ff')
+        base_color = LEVEL_COLORS.get(lvl, '#3388ff')
+        color, radius = _style_for_row(row, base_color)
         distance_text = popup_distance_text(row['Latitude'], row['Longitude'], prefer_drive=False)
         popup_obj = make_worker_popup(
             name=row.get('Name',''),
             level=row.get('Level',''),
             address=_full_address_from_row(row),
-            zip_code=row.get('ZIP',''),
+            zip_code=None,  # ZIP 不显示
             distance_text=distance_text,
             contact=row.get('Contact'),
             email=row.get('Email'),
@@ -1301,7 +1354,7 @@ else:
         )
         folium.CircleMarker(
             location=[row['Latitude'], row['Longitude']],
-            radius=6, color=color, fill=True, fill_color=color, fill_opacity=0.9,
+            radius=radius, color=color, fill=True, fill_color=color, fill_opacity=0.9,
             popup=popup_obj
         ).add_to(workers_fg)
 
@@ -1313,12 +1366,11 @@ def render_hit_flags(map_obj, matched_df):
         return
     for _, r in matched_df.iterrows():
         dist_txt = popup_distance_text(r['Latitude'], r['Longitude'], prefer_drive=True)
-        icons = (" 🔧" if bool(r.get('IsColdFlag')) else "") + (" 🔥" if bool(r.get('IsHotFlag')) else "")
         popup_obj = make_worker_popup(
             name=r.get('Name',''),
             level=r.get('Level',''),
             address=_full_address_from_row(r),
-            zip_code=r.get('ZIP',''),
+            zip_code=None,  # ZIP 不显示
             distance_text=dist_txt,
             contact=r.get('Contact'),
             email=r.get('Email'),
@@ -1330,7 +1382,7 @@ def render_hit_flags(map_obj, matched_df):
         folium.Marker(
             location=[float(r['Latitude']), float(r['Longitude'])],
             icon=big_flag_icon(size_px=42),
-            tooltip=f"🔎 命中：{_s(r.get('Name',''))}{icons}",
+            tooltip=f"🔎 命中：{_s(r.get('Name',''))}",
             popup=popup_obj,
             z_index_offset=10000
         ).add_to(map_obj)
@@ -1349,17 +1401,17 @@ if cust_pin:
         z_index_offset=12000
     ).add_to(m)
 
-# 网上新增层
+# 网上新增层（改为棕色图标）
 if "_web_new_layer" in st.session_state:
     add_fg = folium.FeatureGroup(name="网上新增维修工（抓取）", show=True).add_to(m)
     for r in st.session_state.pop("_web_new_layer"):
         name = _s(r.get("Name"))
         dist_txt = popup_distance_text(r.get("Latitude"), r.get("Longitude"), prefer_drive=False)
-        popup_obj = make_worker_popup(name, r.get("Level","7"), _s(r.get("Address","")), r.get("ZIP",""), dist_txt)
+        popup_obj = make_worker_popup(name, r.get("Level","7"), _s(r.get("Address","")), None, dist_txt)
         folium.Marker(
             location=[float(r["Latitude"]), float(r["Longitude"])],
-            icon=blue_wrench_icon(),
-            tooltip=f"🔧 新增：{name}",
+            icon=blue_wrench_icon(size_px=28),  # 棕色圆点
+            tooltip=f"新增：{name}",
             popup=popup_obj
         ).add_to(add_fg)
 
