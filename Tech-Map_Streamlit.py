@@ -558,13 +558,24 @@ df.drop(columns=['postal_code','latitude','longitude','state_code','place_name',
 # === 冷/热 标记的标准化 ===
 def _to_bool_cn_en(x):
     try:
-        if pd.isna(x):
+        if x is None or pd.isna(x):
             return False
     except Exception:
         if x is None:
             return False
     s = str(x).strip().lower()
-    return s in {'是','yes','y','true','1','✓','✔'}
+
+    TRUE_TOKENS  = {'是','yes','y','true','t','1','✓','✔','√','✅'}
+    FALSE_TOKENS = {'否','no','n','false','f','0','×','x','✗','✕','❌','-',''}
+
+    if s in TRUE_TOKENS:  return True
+    if s in FALSE_TOKENS: return False
+    # 兜底：能转数字就按非零为真
+    try:
+        return bool(int(s))
+    except Exception:
+        return False
+
 
 if 'IsColdFlag' not in df.columns:
     df['IsColdFlag'] = df.get('Is Cold', pd.Series(False, index=df.index)).apply(_to_bool_cn_en)
@@ -1278,15 +1289,21 @@ def make_worker_popup(
 def make_lite_popup_row(row):
     addr = _full_address_from_row(row)
     dist = popup_distance_text(row['LatAdj'], row['LngAdj'], prefer_drive=False)
+
+    icons_html = ""
+    if bool(row.get('IsColdFlag', False)): icons_html += " 🔧"
+    if bool(row.get('IsHotFlag',  False)): icons_html += " 🔥"
+
     html = f"""
     <div style="min-width:260px; font-size:12.5px; line-height:1.35; white-space:normal;">
-      <div><b>名称：</b>{_s(row.get('Name',''))}</div>
+      <div><b>名称：</b>{_s(row.get('Name',''))}{icons_html}</div>
       <div><b>等级：</b>{_s(row.get('Level',''))}</div>
       <div><b>地址：</b>{_s(addr)}</div>
       <div><b>距离：</b>{_s(dist)}</div>
     </div>
     """
     return folium.Popup(html, max_width=360)
+
 
 
 # 距离/时间
