@@ -15,6 +15,13 @@ from folium.plugins import MarkerCluster
 # ======================
 st.set_page_config(page_title="Tech Map", layout="wide")
 USE_STATIC_MAP = True  # Folium 用原生 HTML 渲染，更快
+# ---- 兼容 rerun（新：st.rerun；旧：st.experimental_rerun）----
+def _safe_rerun():
+    try:
+        st.rerun()
+    except AttributeError:
+        st.experimental_rerun()
+
 
 # ---------- 正则 ----------
 HVAC_PAT_STR = (
@@ -154,19 +161,12 @@ div[data-testid="stIFrame"]{ margin-top: .1rem!important; }
 # ======================
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 你本机的路径（本机运行时可用）
-LOCAL_DIR = r"C:\Users\jeffy\chris\tech map"
-
-# 可选：用环境变量覆盖（比如以后想指定别的目录）
+LOCAL_DIR = r"C:\Users\jeffy\chris\tech map"  # 本机跑时可用
 DATA_DIR_ENV = os.getenv("TECH_MAP_DATA_DIR")
 
-# 决策顺序：环境变量 > 本机目录存在 > 仓库内 ./data
-DATA_DIR_DEFAULT = (
-    DATA_DIR_ENV
-    or (LOCAL_DIR if os.path.exists(LOCAL_DIR) else os.path.join(APP_DIR, "data"))
-)
-
+DATA_DIR_DEFAULT = DATA_DIR_ENV or (LOCAL_DIR if os.path.exists(LOCAL_DIR) else os.path.join(APP_DIR, "data"))
 os.makedirs(DATA_DIR_DEFAULT, exist_ok=True)
+
 SUPPORT_EXTS = (".csv", ".xlsx", ".xls")
 
 if "data_dir_path" not in st.session_state:
@@ -222,6 +222,51 @@ if st.session_state.df is None and _files:
         st.error(f"读取 {_files[0]} 失败：{e}")
 
 df = st.session_state.get("df")
+# 侧边栏底部：数据源/Key
+st.markdown("---")
+with st.expander("📁 数据源（固定文件夹）", expanded=False):
+        new_dir = st.text_input("数据文件夹路径", value=st.session_state.data_dir_path)
+        if new_dir != st.session_state.data_dir_path:
+            st.session_state.data_dir_path = new_dir
+        os.makedirs(st.session_state.data_dir_path, exist_ok=True)
+
+        files2 = [f for f in os.listdir(st.session_state.data_dir_path) if f.lower().endswith(SUPPORT_EXTS)]
+        files2 = sorted(files2, key=lambda f: os.path.getmtime(os.path.join(st.session_state.data_dir_path, f)), reverse=True)
+
+        if files2:
+            pick = st.selectbox("选择已保存的数据文件", files2, index=0, key="pick_file_bottom")
+            if st.button("载入所选文件", key="btn_load_selected_bottom"):
+                try:
+                    path = os.path.join(st.session_state.data_dir_path, pick)
+                    st.session_state.df = _load_df(path)
+                    st.session_state.data_meta = {"filename": pick, "path": path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                    st.success(f"已载入：{pick}")
+                    _safe_rerun()
+                except Exception as e:
+                    st.error(f"载入失败：{e}")
+        else:
+            st.info("当前文件夹没有任何数据文件（csv/xlsx/xls）。")
+
+        new_file = st.file_uploader("上传新数据（保存进文件夹）", type=['csv', 'xlsx', 'xls'], key="uploader_new_bottom")
+        if new_file is not None:
+            try:
+                saved_path = _save_uploaded(new_file, st.session_state.data_dir_path)
+                st.session_state.df = _load_df(saved_path)
+                st.session_state.data_meta = {"filename": os.path.basename(saved_path), "path": saved_path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                st.success(f"已上传并载入：{os.path.basename(saved_path)}")
+                _safe_rerun()
+            except Exception as e:
+                st.error(f"上传/读取失败：{e}")
+
+        if st.session_state.get("df") is not None:
+            meta = st.session_state.get("data_meta", {})
+            st.success(
+                f"**{meta.get('filename','(未命名)')}**\n\n"
+                f"路径：{meta.get('path','')}\n\n"
+                f"载入时间：{meta.get('loaded_at','')}\n\n"
+                f"行数：{len(st.session_state.df)}"
+            )
+
 if df is None:
     st.warning("尚未加载任何数据。请到侧边栏最底部【📁 数据源（固定文件夹）】选择或上传文件。")
     st.stop()
@@ -588,51 +633,7 @@ with st.sidebar:
         st.checkbox("Canvas 渲染矢量", key="perf_prefer_canvas", value=st.session_state.get("perf_prefer_canvas", True))
         st.slider("最多渲染范围数（郡/城市圈）", 200, 5000, int(st.session_state.get("perf_max_units", 1500)), 100, key="perf_max_units")
 
-    # 侧边栏底部：数据源/Key
-    st.markdown("---")
-    with st.expander("📁 数据源（固定文件夹）", expanded=False):
-        new_dir = st.text_input("数据文件夹路径", value=st.session_state.data_dir_path)
-        if new_dir != st.session_state.data_dir_path:
-            st.session_state.data_dir_path = new_dir
-        os.makedirs(st.session_state.data_dir_path, exist_ok=True)
-
-        files2 = [f for f in os.listdir(st.session_state.data_dir_path) if f.lower().endswith(SUPPORT_EXTS)]
-        files2 = sorted(files2, key=lambda f: os.path.getmtime(os.path.join(st.session_state.data_dir_path, f)), reverse=True)
-
-        if files2:
-            pick = st.selectbox("选择已保存的数据文件", files2, index=0, key="pick_file_bottom")
-            if st.button("载入所选文件", key="btn_load_selected_bottom"):
-                try:
-                    path = os.path.join(st.session_state.data_dir_path, pick)
-                    st.session_state.df = _load_df(path)
-                    st.session_state.data_meta = {"filename": pick, "path": path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                    st.success(f"已载入：{pick}")
-                    st.experimental_rerun()
-                except Exception as e:
-                    st.error(f"载入失败：{e}")
-        else:
-            st.info("当前文件夹没有任何数据文件（csv/xlsx/xls）。")
-
-        new_file = st.file_uploader("上传新数据（保存进文件夹）", type=['csv', 'xlsx', 'xls'], key="uploader_new_bottom")
-        if new_file is not None:
-            try:
-                saved_path = _save_uploaded(new_file, st.session_state.data_dir_path)
-                st.session_state.df = _load_df(saved_path)
-                st.session_state.data_meta = {"filename": os.path.basename(saved_path), "path": saved_path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                st.success(f"已上传并载入：{os.path.basename(saved_path)}")
-                st.experimental_rerun()
-            except Exception as e:
-                st.error(f"上传/读取失败：{e}")
-
-        if st.session_state.get("df") is not None:
-            meta = st.session_state.get("data_meta", {})
-            st.success(
-                f"**{meta.get('filename','(未命名)')}**\n\n"
-                f"路径：{meta.get('path','')}\n\n"
-                f"载入时间：{meta.get('loaded_at','')}\n\n"
-                f"行数：{len(st.session_state.df)}"
-            )
-
+    
     st.caption(f"🔑 Google Places：{'✅ 已读取' if GOOGLE_PLACES_KEY else '❌ 未设置'}  {_mask_key(GOOGLE_PLACES_KEY)}")
 
 # ======================
@@ -1039,7 +1040,8 @@ with st.expander("🌐 网上补充数据", expanded=False):
                     if c not in online_df.columns: online_df[c] = pd.NA
                 st.session_state.df = pd.concat([st.session_state.df, online_df[cols]], ignore_index=True)
                 st.toast("已把网上新增点（Level=7）合并到数据集中。")
-                st.experimental_rerun()
+                _safe_rerun()
+
 
 # ======================
 # 搜索行（对调后：现在紧贴地图上方）
@@ -1119,10 +1121,6 @@ if st.session_state.get("hvac_only", False):
        ~text.str.contains(BLACK_PAT_STR, case=False, na=False, regex=True)
     ]
 
-# 应用“只看新增/只看好维修工”
-points = filtered.dropna(subset=['Latitude','Longitude']).copy()
-if show_only_new:
-    points = points[points['Level'].eq(7)]
 # 应用“只看新增/只看好维修工”
 points = filtered.dropna(subset=['Latitude','Longitude']).copy()
 if show_only_new:
