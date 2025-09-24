@@ -8,7 +8,7 @@ from datetime import datetime
 import re, os, json, urllib.request
 import io
 import requests, time
-from folium.plugins import MarkerCluster
+from folium.plugins import MarkerCluster, BeautifyIcon
 
 # ======================
 # 基础设置
@@ -45,16 +45,15 @@ HVAC_RE  = re.compile(HVAC_PAT_STR,  re.IGNORECASE)
 BLACK_RE = re.compile(BLACK_PAT_STR, re.IGNORECASE)
 
 # ---------- 图标 ----------
-# “新增维修工”改为棕色的圆点（保留原函数名以避免改调用处）
+# “新增维修工”改为棕色的通用水滴坐标（保留原函数名以避免改调用处）
 def blue_wrench_icon(size_px: int = 24):
-    return folium.DivIcon(
-        html=f"""
-        <div style="filter: drop-shadow(0 0 2px rgba(0,0,0,.35)); width:{size_px}px; height:{size_px}px; display:flex; align-items:center; justify-content:center;">
-          <span style="font-size:{size_px}px; line-height:1;">🟤</span>
-        </div>
-        """,
-        icon_size=(size_px, size_px),
-        icon_anchor=(size_px // 2, int(size_px * 0.92)),
+    return BeautifyIcon(
+        icon_shape='marker',  # 水滴
+        background_color='#8B4513',  # 棕色
+        border_color='#5C4033',
+        border_width=2,
+        text_color='#ffffff',
+        icon_size=[int(size_px*1.2), int(size_px*1.9)]
     )
 
 def big_flag_icon(size_px: int = 42, anchor_y_factor: float = 0.92):
@@ -209,7 +208,7 @@ if st.session_state.df is None and _files:
 
 df = st.session_state.get("df", None)
 if df is None:
-    # 让侧边栏在“无数据”时也能出现上传/选择入口
+    # 无数据时，侧边栏也能操作数据源
     with st.sidebar:
         st.markdown("---")
         with st.expander("📁 数据源（固定文件夹）", expanded=True):
@@ -577,6 +576,7 @@ with st.sidebar:
     states_for_level = sorted((counties_master if geo_level.startswith("郡") else cities_master)['State'].unique().tolist())
     state_choice = st.selectbox('选择州 (State)', ['全部'] + states_for_level)
 
+    # 选择州后，仅显示该州对应的郡/城市
     if geo_level.startswith("郡"):
         units = sorted(counties_master.loc[counties_master['State']==state_choice, 'County'].unique().tolist()) if state_choice!='全部' \
                 else sorted(counties_master['County'].unique().tolist())[:5000]
@@ -639,7 +639,7 @@ with st.sidebar:
             try:
                 saved_path = _save_uploaded(new_file, st.session_state.data_dir_path)
                 st.session_state.df = _load_df(saved_path)
-                st.session_state.data_meta = {"filename": os.path.basename(saved_path), "path": saved_path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                st.session_state.data_meta = {"filename": os.path.basename(saved_path), "path": saved_path, "loaded_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 st.success(f"已上传并载入：{os.path.basename(saved_path)}")
                 _safe_rerun()
             except Exception as e:
@@ -1112,11 +1112,15 @@ points = filtered.dropna(subset=['Latitude','Longitude']).copy()
 if show_only_new:
     points = points[points['Level'].eq(7)]
 
-with st.expander("🛠 显示/调试（仅排查用）", expanded=False):
-    st.write(f"当前可见点位：**{len(points)}** / 原始有经纬度的点：**{df.dropna(subset=['Latitude','Longitude']).shape[0]}**")
-    st.caption(f"缺失纬度：{int(df['Latitude'].isna().sum())}，缺失经度：{int(df['Longitude'].isna().sum())}")
-    force_show_all = st.checkbox("忽略所有筛选（强制显示全部有经纬度的点）", value=False)
-if force_show_all:
+# 显示/调试 放到侧边栏最下面
+with st.sidebar:
+    st.markdown("---")
+    with st.expander("🛠 显示/调试（仅排查用）", expanded=False):
+        st.write(f"当前可见点位：**{len(points)}** / 原始有经纬度的点：**{df.dropna(subset=['Latitude','Longitude']).shape[0]}**")
+        st.caption(f"缺失纬度：{int(df['Latitude'].isna().sum())}，缺失经度：{int(df['Longitude'].isna().sum())}")
+        force_show_all = st.checkbox("忽略所有筛选（强制显示全部有经纬度的点）", value=False, key="force_show_all_cb")
+
+if st.session_state.get("force_show_all_cb"):
     points = df.dropna(subset=['Latitude','Longitude']).copy()
 
 if only_show_good_points:
@@ -1147,7 +1151,6 @@ search_active = bool(has_query) and (len(matched) > 0)
 # 地图绘制
 # ======================
 US_STATES_GEO_PATH = os.path.join(data_dir, "us_states.geojson")
-# 校准后的颜色映射（严格按等级）
 LEVEL_COLORS = {
     1:'#2ecc71',  # 绿
     2:'#FFD700',  # 金
@@ -1208,7 +1211,6 @@ if states_geo:
 radius_m = radius_miles * 1609.34
 unit_fg = folium.FeatureGroup(name=layer_name, show=True).add_to(m)
 
-# 不再在圈提示里展示 ZIP 相关信息
 for _, r in centroids_to_plot.iterrows():
     ring_color = '#1e88e5' if bool(r['meets']) else '#9e9e9e'
     tip = (f"{'County' if geo_level.startswith('郡') else 'City'}: {r.get(name_col)} "
@@ -1217,7 +1219,7 @@ for _, r in centroids_to_plot.iterrows():
                   color=ring_color, weight=1.6, fill=True, fill_opacity=0.05,
                   tooltip=tip).add_to(unit_fg)
 
-# ---- 弹窗模板（按要求：不显示 ZIP；距离放在备注后；冷/热图标放大）----
+# 弹窗
 POPUP_MAX_W = 520
 def make_worker_popup(
     name, level, address=None, zip_code=None, distance_text="",
@@ -1231,7 +1233,6 @@ def make_worker_popup(
         except Exception:
             if v is None: return False
         return str(v).strip() != ""
-    # 放大冷/热图标（保持原符号）
     icons_html = ""
     if bool(is_cold): icons_html += "<span style='font-size:18px;line-height:1'>🔧</span>"
     if bool(is_hot):  icons_html += "<span style='font-size:18px;line-height:1'>🔥</span>"
@@ -1252,7 +1253,7 @@ def make_worker_popup(
     """
     return folium.Popup(html, max_width=POPUP_MAX_W)
 
-# 距离/时间工具
+# 距离/时间
 def haversine_miles(lat1, lng1, lat2, lng2):
     R = 3958.7613
     p1 = np.radians([lat1, lng1]); p2 = np.radians([lat2, lng2])
@@ -1273,7 +1274,6 @@ def osrm_drive_info(lat1, lng1, lat2, lng2, timeout=8):
     return None
 
 cust_pin = st.session_state.get("cust_quick_pin")
-
 def popup_distance_text(lat, lng, prefer_drive=False):
     if not cust_pin:
         return "-"
@@ -1284,12 +1284,44 @@ def popup_distance_text(lat, lng, prefer_drive=False):
             return f"{drive[0]:.1f} mi · {int(round(drive[1]))} min"
     return f"{dline:.1f} mi（直线）"
 
-# ====== 名称包含 INHOUSE-TECH 的样式：蓝色 + 更大 ======
-def _style_for_row(row, base_color):
-    name = str(row.get('Name',''))
-    if "INHOUSE-TECH" in name.upper():
-        return "#1E90FF", 10  # 更大半径
-    return base_color, 6
+# INHOUSE 尺寸保持不变；其他维修工小一点（仍为水滴）
+def _is_inhouse(name: str) -> bool:
+    return "INHOUSE-TECH" in str(name).upper()
+
+def _make_marker_icon(color_hex: str, larger: bool = False):
+    return BeautifyIcon(
+        icon_shape='marker',  # 水滴
+        background_color=color_hex,
+        border_color='#2b2b2b',
+        border_width=3 if larger else 2,
+        text_color='#ffffff',
+        # 非 INHOUSE 更小；INHOUSE 保持原先较大尺寸
+        icon_size=[36, 54] if larger else [24, 38]
+    )
+
+# -------- 同坐标不同名称：分散 & 彩色区分 --------
+DUP_PALETTE = ["#377eb8","#4daf4a","#984ea3","#ff7f00","#e41a1c","#a65628",
+               "#f781bf","#999999","#66c2a5","#fc8d62","#8da0cb","#e78ac3"]
+
+points['LatAdj'] = points['Latitude'].values
+points['LngAdj'] = points['Longitude'].values
+points['_dup_color'] = pd.NA
+
+if not points.empty:
+    grp = points.groupby(['Latitude','Longitude'])
+    for (lat0, lng0), idxs in grp.groups.items():
+        sub = points.loc[idxs]
+        if sub['Name'].astype(str).nunique() > 1 and len(sub) > 1:
+            k = len(sub)
+            delta = 0.00035
+            lat_rad = np.radians(lat0 if pd.notna(lat0) else 0.0)
+            for j, idx in enumerate(sub.index):
+                ang = 2*np.pi * (j / k)
+                dlat = delta * np.cos(ang)
+                dlng = (delta / max(0.15, np.cos(lat_rad))) * np.sin(ang)
+                points.at[idx, 'LatAdj'] = float(lat0) + dlat
+                points.at[idx, 'LngAdj'] = float(lng0) + dlng
+                points.at[idx, '_dup_color'] = DUP_PALETTE[j % len(DUP_PALETTE)]
 
 # 点位层（聚合/非聚合）
 workers_fg = folium.FeatureGroup(name="维修工点位", show=True).add_to(m)
@@ -1313,13 +1345,15 @@ if use_cluster and len(points) > 2000:
     for _, row in points.iterrows():
         lvl = int(row['Level']) if not pd.isna(row['Level']) else None
         base_color = LEVEL_COLORS.get(lvl, '#3388ff')
-        color, radius = _style_for_row(row, base_color)
-        distance_text = popup_distance_text(row['Latitude'], row['Longitude'], prefer_drive=False)
+        use_color = _s(row['_dup_color']) if pd.notna(row['_dup_color']) else base_color
+        larger = _is_inhouse(row.get('Name',''))
+        icon = _make_marker_icon('#1E90FF' if larger else use_color, larger=larger)
+        distance_text = popup_distance_text(row['LatAdj'], row['LngAdj'], prefer_drive=False)
         popup_obj = make_worker_popup(
             name=row.get('Name',''),
             level=row.get('Level',''),
             address=_full_address_from_row(row),
-            zip_code=None,  # ZIP 不显示
+            zip_code=None,
             distance_text=distance_text,
             contact=row.get('Contact'),
             email=row.get('Email'),
@@ -1328,22 +1362,25 @@ if use_cluster and len(points) > 2000:
             is_cold=row.get('IsColdFlag', False),
             is_hot=row.get('IsHotFlag',  False),
         )
-        folium.CircleMarker(
-            location=[row['Latitude'], row['Longitude']],
-            radius=radius, color=color, fill=True, fill_color=color, fill_opacity=0.9,
-            popup=popup_obj
+        folium.Marker(
+            location=[row['LatAdj'], row['LngAdj']],
+            icon=icon,
+            popup=popup_obj,
+            tooltip=_s(row.get('Name',''))
         ).add_to(clusters.get(lvl, workers_fg))
 else:
     for _, row in points.iterrows():
         lvl = int(row['Level']) if not pd.isna(row['Level']) else None
         base_color = LEVEL_COLORS.get(lvl, '#3388ff')
-        color, radius = _style_for_row(row, base_color)
-        distance_text = popup_distance_text(row['Latitude'], row['Longitude'], prefer_drive=False)
+        use_color = _s(row['_dup_color']) if pd.notna(row['_dup_color']) else base_color
+        larger = _is_inhouse(row.get('Name',''))
+        icon = _make_marker_icon('#1E90FF' if larger else use_color, larger=larger)
+        distance_text = popup_distance_text(row['LatAdj'], row['LngAdj'], prefer_drive=False)
         popup_obj = make_worker_popup(
             name=row.get('Name',''),
             level=row.get('Level',''),
             address=_full_address_from_row(row),
-            zip_code=None,  # ZIP 不显示
+            zip_code=None,
             distance_text=distance_text,
             contact=row.get('Contact'),
             email=row.get('Email'),
@@ -1352,10 +1389,11 @@ else:
             is_cold=row.get('IsColdFlag', False),
             is_hot=row.get('IsHotFlag',  False),
         )
-        folium.CircleMarker(
-            location=[row['Latitude'], row['Longitude']],
-            radius=radius, color=color, fill=True, fill_color=color, fill_opacity=0.9,
-            popup=popup_obj
+        folium.Marker(
+            location=[row['LatAdj'], row['LngAdj']],
+            icon=icon,
+            popup=popup_obj,
+            tooltip=_s(row.get('Name',''))
         ).add_to(workers_fg)
 
 # ======================
@@ -1370,7 +1408,7 @@ def render_hit_flags(map_obj, matched_df):
             name=r.get('Name',''),
             level=r.get('Level',''),
             address=_full_address_from_row(r),
-            zip_code=None,  # ZIP 不显示
+            zip_code=None,
             distance_text=dist_txt,
             contact=r.get('Contact'),
             email=r.get('Email'),
@@ -1401,7 +1439,7 @@ if cust_pin:
         z_index_offset=12000
     ).add_to(m)
 
-# 网上新增层（改为棕色图标）
+# 网上新增层（棕色水滴，尺寸更小）
 if "_web_new_layer" in st.session_state:
     add_fg = folium.FeatureGroup(name="网上新增维修工（抓取）", show=True).add_to(m)
     for r in st.session_state.pop("_web_new_layer"):
@@ -1410,7 +1448,7 @@ if "_web_new_layer" in st.session_state:
         popup_obj = make_worker_popup(name, r.get("Level","7"), _s(r.get("Address","")), None, dist_txt)
         folium.Marker(
             location=[float(r["Latitude"]), float(r["Longitude"])],
-            icon=blue_wrench_icon(size_px=28),  # 棕色圆点
+            icon=blue_wrench_icon(size_px=18),  # 更小的水滴
             tooltip=f"新增：{name}",
             popup=popup_obj
         ).add_to(add_fg)
