@@ -149,20 +149,32 @@ div[data-testid="stIFrame"]{ margin-top: .1rem!important; }
 </style>
 """, unsafe_allow_html=True)
 
-# 数据目录（固定文件夹）
+# ======================
+# 数据目录（本机优先，云端用仓库 data/；也支持环境变量覆盖）
 # ======================
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_LOCAL = r"C:\Users\jeffy\chris\tech map"
-# 本机有就用本机路径；云端（没有 C:）则使用仓库内的 ./data
-DATA_DIR_DEFAULT = DEFAULT_LOCAL if os.path.exists(DEFAULT_LOCAL) else os.path.join(APP_DIR, "data")
-os.makedirs(DATA_DIR_DEFAULT, exist_ok=True)
 
+# 你本机的路径（本机运行时可用）
+LOCAL_DIR = r"C:\Users\jeffy\chris\tech map"
+
+# 可选：用环境变量覆盖（比如以后想指定别的目录）
+DATA_DIR_ENV = os.getenv("TECH_MAP_DATA_DIR")
+
+# 决策顺序：环境变量 > 本机目录存在 > 仓库内 ./data
+DATA_DIR_DEFAULT = (
+    DATA_DIR_ENV
+    or (LOCAL_DIR if os.path.exists(LOCAL_DIR) else os.path.join(APP_DIR, "data"))
+)
+
+os.makedirs(DATA_DIR_DEFAULT, exist_ok=True)
 SUPPORT_EXTS = (".csv", ".xlsx", ".xls")
 
 if "data_dir_path" not in st.session_state:
     st.session_state.data_dir_path = DATA_DIR_DEFAULT
+
 data_dir = st.session_state.data_dir_path
 os.makedirs(data_dir, exist_ok=True)
+
 
 def _list_files():
     try:
