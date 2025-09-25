@@ -45,16 +45,30 @@ HVAC_RE  = re.compile(HVAC_PAT_STR,  re.IGNORECASE)
 BLACK_RE = re.compile(BLACK_PAT_STR, re.IGNORECASE)
 
 # ---------- 图标 ----------
-# “新增维修工”改为棕色的通用水滴坐标（保留原函数名以避免改调用处）
+# 生成“空心水滴（环形）”SVG 的 DivIcon（与截图一致的风格）
+def ring_pin_icon(color_hex: str = "#1E90FF", size_h_px: int = 38):
+    """
+    color_hex: 环形颜色
+    size_h_px: 图标整体高度（像素）；宽度按 0.75 比例自动适配
+    """
+    w = int(size_h_px * 0.75)
+    html = f"""
+    <svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{size_h_px}" viewBox="0 0 48 64"
+         style="filter: drop-shadow(0 1px 2px rgba(0,0,0,.35));">
+      <!-- 外部水滴形，纯色填充 -->
+      <path d="M24 2C12 2 2 12.5 2 25c0 17 22 37 22 37s22-20 22-37C46 12.5 36 2 24 2z"
+            fill="{color_hex}"/>
+      <!-- 中间留白的圆，形成“空心环” -->
+      <circle cx="24" cy="25" r="10" fill="#ffffff"/>
+    </svg>
+    """
+    # 锚点在底部尖角附近，方便落在经纬度位置上
+    return folium.DivIcon(html=html, icon_size=(w, size_h_px), icon_anchor=(w // 2, int(size_h_px * 0.92)))
+
+# 兼容旧调用名：网上抓取新增层（之前叫 blue_wrench_icon），现在也用“空心水滴”，颜色棕色
 def blue_wrench_icon(size_px: int = 24):
-    return BeautifyIcon(
-        icon_shape='marker',  # 水滴
-        background_color='#8B4513',  # 棕色
-        border_color='#5C4033',
-        border_width=2,
-        text_color='#ffffff',
-        icon_size=[int(size_px*1.2), int(size_px*1.9)]
-    )
+    # 这里把参数当高度用，默认做得更小一点
+    return ring_pin_icon("#8B4513", size_h_px=max(22, int(size_px * 1.2)))
 
 def big_flag_icon(size_px: int = 42, anchor_y_factor: float = 0.92):
     anchor_y = int(size_px * anchor_y_factor)
@@ -110,7 +124,7 @@ st.markdown("""
 div[data-testid="stDecoration"]{display:none!important;}
 header[data-testid="stHeader"]{ height:2.4rem !important; visibility:visible !important; }
 :root, .stApp { --top-toolbar-height:2.4rem !important; }
-button[title="Toggle sidebar"]{ opacity:1 !important; pointer-events:auto !重要; }
+button[title="Toggle sidebar"]{ opacity:1 !important; pointer-events:auto !important; }
 
 .stAppViewContainer{ padding-top:0!important; }
 .main .block-container{ padding-top:.1rem!important; margin-top:0!important; }
@@ -544,13 +558,24 @@ df.drop(columns=['postal_code','latitude','longitude','state_code','place_name',
 # === 冷/热 标记的标准化 ===
 def _to_bool_cn_en(x):
     try:
-        if pd.isna(x):
+        if x is None or pd.isna(x):
             return False
     except Exception:
         if x is None:
             return False
     s = str(x).strip().lower()
-    return s in {'是','yes','y','true','1','✓','✔'}
+
+    TRUE_TOKENS  = {'是','yes','y','true','t','1','✓','✔','√','✅'}
+    FALSE_TOKENS = {'否','no','n','false','f','0','×','x','✗','✕','❌','-',''}
+
+    if s in TRUE_TOKENS:  return True
+    if s in FALSE_TOKENS: return False
+    # 兜底：能转数字就按非零为真
+    try:
+        return bool(int(s))
+    except Exception:
+        return False
+
 
 if 'IsColdFlag' not in df.columns:
     df['IsColdFlag'] = df.get('Is Cold', pd.Series(False, index=df.index)).apply(_to_bool_cn_en)
@@ -606,8 +631,14 @@ with st.sidebar:
         st.checkbox("点位聚合（多点更快）", key="perf_use_cluster", value=st.session_state.get("perf_use_cluster", True))
         st.checkbox("Canvas 渲染矢量", key="perf_prefer_canvas", value=st.session_state.get("perf_prefer_canvas", True))
         st.slider("最多渲染范围数（郡/城市圈）", 200, 5000, int(st.session_state.get("perf_max_units", 1500)), 100, key="perf_max_units")
-
-    st.caption(f"🔑 Google Places：{'✅ 已读取' if GOOGLE_PLACES_KEY else '❌ 未设置'}  {_mask_key(GOOGLE_PLACES_KEY)}")
+        st.checkbox("非聚合极速渲染（用圆点代替水滴）", key="perf_fast_dots",
+            value=st.session_state.get("perf_fast_dots", True))
+        st.slider("极速渲染阈值（点数）", 500, 20000,
+          int(st.session_state.get("perf_fast_threshold", 2500)), 100,
+          key="perf_fast_threshold")
+        st.slider("极速圆点半径(px)", 2, 12,
+          int(st.session_state.get("perf_fast_radius", 8)), 1,
+          key="perf_fast_radius")
 
 with st.sidebar:
     st.markdown("---")
@@ -1120,6 +1151,7 @@ with st.sidebar:
         st.caption(f"缺失纬度：{int(df['Latitude'].isna().sum())}，缺失经度：{int(df['Longitude'].isna().sum())}")
         force_show_all = st.checkbox("忽略所有筛选（强制显示全部有经纬度的点）", value=False, key="force_show_all_cb")
 
+
 if st.session_state.get("force_show_all_cb"):
     points = df.dropna(subset=['Latitude','Longitude']).copy()
 
@@ -1147,6 +1179,7 @@ if q_addr:
     matched = matched[addr_mask]
 search_active = bool(has_query) and (len(matched) > 0)
 
+
 # ======================
 # 地图绘制
 # ======================
@@ -1162,8 +1195,44 @@ LEVEL_COLORS = {
 }
 
 prefer_canvas = st.session_state.get("perf_prefer_canvas", True)
-m = folium.Map(location=[37.8, -96.0], zoom_start=4, keyboard=False,
-               prefer_canvas=prefer_canvas, tiles="OpenStreetMap")
+
+# 不直接用 provider 名称，改为手动挂多套瓦片，避免某个 CDN 被拦就全灰
+m = folium.Map(
+    location=[37.8, -96.0],
+    zoom_start=4,
+    keyboard=False,
+    prefer_canvas=prefer_canvas,
+    tiles=None
+)
+
+# 默认 OSM 官方
+folium.TileLayer(
+    tiles="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attr="&copy; OpenStreetMap contributors",
+    name="OSM（官方）", control=True, max_zoom=19, overlay=False
+).add_to(m)
+
+# 备用 1：OSM HOT（法国）
+folium.TileLayer(
+    tiles="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+    attr="&copy; OpenStreetMap France, HOT",
+    name="OSM HOT（备用）", control=True, max_zoom=19, overlay=False
+).add_to(m)
+
+# 备用 2：OSM DE（德国）
+folium.TileLayer(
+    tiles="https://tile.openstreetmap.de/{z}/{x}/{y}.png",
+    attr="&copy; OpenStreetMap DE",
+    name="OSM DE（备用）", control=True, max_zoom=19, overlay=False
+).add_to(m)
+
+# 备用 3：Carto（网络好再用）
+folium.TileLayer(
+    tiles="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+    attr="&copy; CARTO",
+    name="Carto Positron（备用）", control=True, max_zoom=20, overlay=False
+).add_to(m)
+
 
 m.get_root().header.add_child(folium.Element("""
 <style>
@@ -1253,6 +1322,26 @@ def make_worker_popup(
     """
     return folium.Popup(html, max_width=POPUP_MAX_W)
 
+def make_lite_popup_row(row):
+    addr = _full_address_from_row(row)
+    dist = popup_distance_text(row['LatAdj'], row['LngAdj'], prefer_drive=False)
+
+    icons_html = ""
+    if bool(row.get('IsColdFlag', False)): icons_html += " 🔧"
+    if bool(row.get('IsHotFlag',  False)): icons_html += " 🔥"
+
+    html = f"""
+    <div style="min-width:260px; font-size:12.5px; line-height:1.35; white-space:normal;">
+      <div><b>名称：</b>{_s(row.get('Name',''))}{icons_html}</div>
+      <div><b>等级：</b>{_s(row.get('Level',''))}</div>
+      <div><b>地址：</b>{_s(addr)}</div>
+      <div><b>距离：</b>{_s(dist)}</div>
+    </div>
+    """
+    return folium.Popup(html, max_width=360)
+
+
+
 # 距离/时间
 def haversine_miles(lat1, lng1, lat2, lng2):
     R = 3958.7613
@@ -1284,50 +1373,48 @@ def popup_distance_text(lat, lng, prefer_drive=False):
             return f"{drive[0]:.1f} mi · {int(round(drive[1]))} min"
     return f"{dline:.1f} mi（直线）"
 
-# INHOUSE 尺寸保持不变；其他维修工小一点（仍为水滴）
+# 判断 INHOUSE-TECH
 def _is_inhouse(name: str) -> bool:
     return "INHOUSE-TECH" in str(name).upper()
 
+# 统一入口：非 INHOUSE 用小号环形；INHOUSE 尺寸保持原来大号不变
 def _make_marker_icon(color_hex: str, larger: bool = False):
-    return BeautifyIcon(
-        icon_shape='marker',  # 水滴
-        background_color=color_hex,
-        border_color='#2b2b2b',
-        border_width=3 if larger else 2,
-        text_color='#ffffff',
-        # 非 INHOUSE 更小；INHOUSE 保持原先较大尺寸
-        icon_size=[36, 54] if larger else [24, 38]
-    )
+    # larger=True -> INHOUSE-TECH（保持原大号 54 高度），否则小号（28 高度）
+    return ring_pin_icon(color_hex, size_h_px=(54 if larger else 28))
 
-# -------- 同坐标不同名称：分散 & 彩色区分 --------
-DUP_PALETTE = ["#377eb8","#4daf4a","#984ea3","#ff7f00","#e41a1c","#a65628",
-               "#f781bf","#999999","#66c2a5","#fc8d62","#8da0cb","#e78ac3"]
-
+# -------- 同坐标不同名称：仅分散（颜色按 Level） --------
 points['LatAdj'] = points['Latitude'].values
 points['LngAdj'] = points['Longitude'].values
-points['_dup_color'] = pd.NA
 
 if not points.empty:
     grp = points.groupby(['Latitude','Longitude'])
     for (lat0, lng0), idxs in grp.groups.items():
         sub = points.loc[idxs]
+        # 同一坐标且不同名称时，做轻微环形分散
         if sub['Name'].astype(str).nunique() > 1 and len(sub) > 1:
             k = len(sub)
             delta = 0.00035
             lat_rad = np.radians(lat0 if pd.notna(lat0) else 0.0)
             for j, idx in enumerate(sub.index):
-                ang = 2*np.pi * (j / k)
+                ang  = 2*np.pi * (j / k)
                 dlat = delta * np.cos(ang)
                 dlng = (delta / max(0.15, np.cos(lat_rad))) * np.sin(ang)
                 points.at[idx, 'LatAdj'] = float(lat0) + dlat
                 points.at[idx, 'LngAdj'] = float(lng0) + dlng
-                points.at[idx, '_dup_color'] = DUP_PALETTE[j % len(DUP_PALETTE)]
+
+# 强制圆点：非聚合 + 极速渲染 = fast_mode
+use_cluster = st.session_state.get("perf_use_cluster", True)
+fast_mode = (not use_cluster) and st.session_state.get("perf_fast_dots", True)
+
+
 
 # 点位层（聚合/非聚合）
 workers_fg = folium.FeatureGroup(name="维修工点位", show=True).add_to(m)
 use_cluster = st.session_state.get("perf_use_cluster", True)
 
-if use_cluster and len(points) > 2000:
+# —— 聚合模式：用 MarkerCluster，显示“气泡” ——
+if use_cluster:
+    # 按 Level 分组建多个 cluster，方便用不同颜色的气泡
     clusters = {}
     for lvl, col in sorted(LEVEL_COLORS.items()):
         clusters[lvl] = MarkerCluster(
@@ -1342,18 +1429,19 @@ if use_cluster and len(points) > 2000:
             }}
             """
         ).add_to(workers_fg)
+
+    # 注意：MarkerCluster 对 L.Marker 支持最好，这里用水滴 DivIcon
     for _, row in points.iterrows():
         lvl = int(row['Level']) if not pd.isna(row['Level']) else None
         base_color = LEVEL_COLORS.get(lvl, '#3388ff')
-        use_color = _s(row['_dup_color']) if pd.notna(row['_dup_color']) else base_color
-        larger = _is_inhouse(row.get('Name',''))
-        icon = _make_marker_icon('#1E90FF' if larger else use_color, larger=larger)
+        larger = _is_inhouse(row.get('Name',''))  # INHOUSE 用大号水滴
+        icon = _make_marker_icon('#1E90FF' if larger else base_color, larger=larger)
+
         distance_text = popup_distance_text(row['LatAdj'], row['LngAdj'], prefer_drive=False)
         popup_obj = make_worker_popup(
             name=row.get('Name',''),
             level=row.get('Level',''),
             address=_full_address_from_row(row),
-            zip_code=None,
             distance_text=distance_text,
             contact=row.get('Contact'),
             email=row.get('Email'),
@@ -1362,26 +1450,28 @@ if use_cluster and len(points) > 2000:
             is_cold=row.get('IsColdFlag', False),
             is_hot=row.get('IsHotFlag',  False),
         )
+
         folium.Marker(
             location=[row['LatAdj'], row['LngAdj']],
             icon=icon,
             popup=popup_obj,
             tooltip=_s(row.get('Name',''))
         ).add_to(clusters.get(lvl, workers_fg))
+
+# —— 非聚合模式：保持你现有逻辑（含极速圆点 & 极限静态优化） ——
+# —— 非聚合模式：统一圆点/水滴的弹窗 —— 
 else:
-    for _, row in points.iterrows():
-        lvl = int(row['Level']) if not pd.isna(row['Level']) else None
-        base_color = LEVEL_COLORS.get(lvl, '#3388ff')
-        use_color = _s(row['_dup_color']) if pd.notna(row['_dup_color']) else base_color
-        larger = _is_inhouse(row.get('Name',''))
-        icon = _make_marker_icon('#1E90FF' if larger else use_color, larger=larger)
-        distance_text = popup_distance_text(row['LatAdj'], row['LngAdj'], prefer_drive=False)
-        popup_obj = make_worker_popup(
+    dot_r = int(st.session_state.get("perf_fast_radius", 8))
+    n_points = len(points)
+    EXTREME_STATIC = (USE_STATIC_MAP and n_points >= int(st.session_state.get("perf_fast_threshold", 2500)))
+    fast_mode = st.session_state.get("perf_fast_dots", True)
+
+    def _popup_for_row(row):
+        return make_worker_popup(
             name=row.get('Name',''),
             level=row.get('Level',''),
             address=_full_address_from_row(row),
-            zip_code=None,
-            distance_text=distance_text,
+            distance_text=popup_distance_text(row['LatAdj'], row['LngAdj'], prefer_drive=False),
             contact=row.get('Contact'),
             email=row.get('Email'),
             phone=row.get('Phone'),
@@ -1389,12 +1479,73 @@ else:
             is_cold=row.get('IsColdFlag', False),
             is_hot=row.get('IsHotFlag',  False),
         )
-        folium.Marker(
-            location=[row['LatAdj'], row['LngAdj']],
-            icon=icon,
-            popup=popup_obj,
-            tooltip=_s(row.get('Name',''))
-        ).add_to(workers_fg)
+
+    if EXTREME_STATIC:
+        for _, row in points.iterrows():
+            lvl = int(row['Level']) if not pd.isna(row['Level']) else None
+            base_color = LEVEL_COLORS.get(lvl, '#3388ff')
+
+            if _is_inhouse(row.get('Name','')):
+                icon = _make_marker_icon('#1E90FF', larger=True)
+                folium.Marker(
+                    location=[row['LatAdj'], row['LngAdj']],
+                    icon=icon,
+                    tooltip=_s(row.get('Name','')),
+                    popup=_popup_for_row(row)
+                ).add_to(workers_fg)
+            else:
+                folium.CircleMarker(
+                    location=[row['LatAdj'], row['LngAdj']],
+                    radius=dot_r,
+                    color=base_color,
+                    fill=True,
+                    fill_opacity=0.85,
+                    weight=0,
+                    tooltip=_s(row.get('Name','')),
+                    popup=_popup_for_row(row)
+                ).add_to(workers_fg)
+        st.caption(f"🧩 静态模式极限优化：{n_points:,} 个点（圆点也挂完整弹窗，HTML 可能较大）")
+
+    elif fast_mode:
+        for _, row in points.iterrows():
+            lvl = int(row['Level']) if not pd.isna(row['Level']) else None
+            base_color = LEVEL_COLORS.get(lvl, '#3388ff')
+
+            if _is_inhouse(row.get('Name','')):
+                icon = _make_marker_icon('#1E90FF', larger=True)
+                folium.Marker(
+                    location=[row['LatAdj'], row['LngAdj']],
+                    icon=icon,
+                    tooltip=_s(row.get('Name','')),
+                    popup=_popup_for_row(row)
+                ).add_to(workers_fg)
+            else:
+                folium.CircleMarker(
+                    location=[row['LatAdj'], row['LngAdj']],
+                    radius=dot_r,
+                    color=base_color,
+                    fill=True,
+                    fill_opacity=0.85,
+                    weight=0,
+                    tooltip=_s(row.get('Name','')),
+                    popup=_popup_for_row(row)
+                ).add_to(workers_fg)
+
+    else:
+        for _, row in points.iterrows():
+            lvl = int(row['Level']) if not pd.isna(row['Level']) else None
+            base_color = LEVEL_COLORS.get(lvl, '#3388ff')
+            larger = _is_inhouse(row.get('Name',''))
+            icon = _make_marker_icon('#1E90FF' if larger else base_color, larger=larger)
+            folium.Marker(
+                location=[row['LatAdj'], row['LngAdj']],
+                icon=icon,
+                popup=_popup_for_row(row),
+                tooltip=_s(row.get('Name',''))
+            ).add_to(workers_fg)
+
+
+
 
 # ======================
 # 搜索命中：红旗
@@ -1503,12 +1654,21 @@ m.get_root().html.add_child(folium.Element(legend_html))
 # 图层开关
 folium.LayerControl(collapsed=True, position='topleft').add_to(m)
 
+with st.sidebar:
+    st.markdown("---")
+    st.caption(f"🔑 Google Places：{'✅ 已读取' if GOOGLE_PLACES_KEY else '❌ 未设置'}  {_mask_key(GOOGLE_PLACES_KEY)}")
+
+
 # 渲染地图
 def render_map_once(m):
     try:
         if USE_STATIC_MAP:
+            # ← 就在这里动手
             from streamlit.components.v1 import html
-            html(m.get_root().render(), height=760)
+            html_str = m._repr_html_()  # 用 folium 自带的 HTML 表达，兼容性更好
+            # HTML 过大时给提示，避免“灰屏/空白”
+        
+            html(html_str, height=760, scrolling=False)
             st.caption("✅ 已用静态(HTML)方式渲染")
         else:
             map_height = st.session_state.get("map_height", 760)
