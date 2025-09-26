@@ -1279,12 +1279,7 @@ m = folium.Map(
     tiles=None
 )
 
-# 默认 OSM 官方
-folium.TileLayer(
-    tiles="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    attr="&copy; OpenStreetMap contributors",
-    name="OSM（官方）", control=True, max_zoom=19, overlay=False
-).add_to(m)
+
 
 # 备用 1：OSM HOT（法国）
 folium.TileLayer(
@@ -1307,6 +1302,12 @@ folium.TileLayer(
     name="Carto Positron（备用）", control=True, max_zoom=20, overlay=False
 ).add_to(m)
 
+# 默认 OSM 官方
+folium.TileLayer(
+    tiles="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attr="&copy; OpenStreetMap contributors",
+    name="OSM（官方）", control=True, max_zoom=19, overlay=False
+).add_to(m)
 
 m.get_root().header.add_child(folium.Element("""
 <style>
