@@ -618,13 +618,17 @@ with st.sidebar:
     min_good      = st.number_input("圈内≥ 好维修工数量", 1, 10, 2, 1)
     only_show_units       = st.checkbox("只显示达标范围", value=True)
     only_show_good_points = st.checkbox("只显示好维修工（按上面的多选）", value=False)
+    st.checkbox("只显示重复地址（同一地址≥2）", value=False, key="only_dup_addr_v3")
+    # ✅ 新增，占位：导出按钮会渲染在这里（复选框正下方）
+    dup_export_slot = st.empty()
 
     st.markdown("---")
     source_mode = st.radio("网上补充数据源", ["自动（Google优先）", "只用Google（更快）", "只用OSM（备用，较慢）"], index=0)
     if "hvac_only" not in st.session_state:
         st.session_state.hvac_only = False
     hvac_only = st.checkbox("只看制冷/制热（HVAC）公司", value=st.session_state.hvac_only, key="hvac_only")
-    show_only_new = st.checkbox("只看网上新增（Level = 7）", value=False)
+    st.checkbox("只看网上新增（Level = 7）", value=False, key="show_only_new")
+
 
     st.markdown("---")
     with st.expander("⚡ 性能设置", expanded=False):
@@ -1115,6 +1119,28 @@ def _full_address_from_row(row):
     parts = [p for p in (city, state, zip5) if p]
     return ", ".join(parts) if parts else ""
 
+def _norm_addr_for_dup(addr: str) -> str:
+    """
+    为“重复地址判断”做强力规整：
+    - 小写
+    - 全角逗号替换为半角
+    - 逗号统一为空格
+    - 把 'FL 1' 统一成 'fl1'
+    - 非字母数字全部当空格
+    - 多个空格压缩成一个
+    """
+    if addr is None:
+        return ""
+    s = str(addr).strip().lower()
+    s = s.replace('，', ',')            # 全角逗号 -> 半角
+    s = s.replace(',', ' ')             # 逗号统一当空格
+    s = re.sub(r'\bfl\s*([0-9]+)\b', r'fl\1', s)  # 'fl 1' -> 'fl1'
+    s = re.sub(r'[^a-z0-9]', ' ', s)    # 只留字母数字
+    s = re.sub(r'\s+', ' ', s).strip()  # 压缩空格
+    return s
+
+
+
 mask = pd.Series(True, index=df.index)
 if level_choice != '全部':
     mask &= (df['Level'] == level_choice)
@@ -1140,8 +1166,9 @@ if st.session_state.get("hvac_only", False):
     ]
 
 points = filtered.dropna(subset=['Latitude','Longitude']).copy()
-if show_only_new:
+if st.session_state.get("show_only_new", False):
     points = points[points['Level'].eq(7)]
+
 
 # 显示/调试 放到侧边栏最下面
 with st.sidebar:
@@ -1159,6 +1186,53 @@ if only_show_good_points:
     _sel_lvls = [int(x) for x in (good_levels or [])]
     points = points[points['Level'].isin(_sel_lvls)] if _sel_lvls else points.iloc[0:0]
 
+# === 新增：应用“只显示重复地址”过滤（放在好维修工过滤之后） ===
+if st.session_state.get("only_dup_addr_v3", False):
+    # 使用统一的地址拼接逻辑，确保“相同地址”判定一致
+    addr_series = points.apply(_full_address_from_row, axis=1).map(_norm_addr_for_dup)
+
+    vc = addr_series.value_counts()
+    dup_mask = addr_series.map(vc).fillna(0) >= 2
+    points = points[dup_mask].copy()
+# === 重复地址导出（放在过滤完成之后，确保 points 已经是当前筛选结果） ===
+# 不论是否勾选“只显示重复地址”，都重算一次“重复次数”，用于导出
+_addr_series_all = points.apply(_full_address_from_row, axis=1).map(_norm_addr_for_dup)
+_vc_all = _addr_series_all.value_counts()
+_dup_mask_all = _addr_series_all.map(_vc_all).fillna(0).astype(int) >= 2
+
+dup_points_export = points[_dup_mask_all].copy()
+if not dup_points_export.empty:
+    dup_points_export.insert(
+        0, "重复次数", _addr_series_all[_dup_mask_all].map(_vc_all).astype(int).values
+    )
+    # 选一些常用列（存在才导出）
+    _cols_pref = ["重复次数","Name","Address","City","State","ZIP","Level","Latitude","Longitude"]
+    _cols_exist = [c for c in _cols_pref if c in dup_points_export.columns]
+
+    # 构建 Excel
+    _dup_buf = _build_xlsx(dup_points_export[_cols_exist], sheet_name="DuplicateAddresses")
+else:
+    _dup_buf = None
+
+# === 把“导出重复地址”按钮渲染到复选框正下方 ===
+if 'dup_export_slot' in locals():  # 防止极端情况下未定义
+    dup_export_slot.empty()  # 先清空占位
+    if st.session_state.get("only_dup_addr_v3", False):
+        if _dup_buf is not None:
+            with dup_export_slot:
+                st.download_button(
+                    "导出重复地址清单（Excel）",
+                    data=_dup_buf,
+                    file_name=f"duplicate_addresses_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="dl_dup_excel",
+                )
+        else:
+            with dup_export_slot:
+                st.caption("（当前筛选下没有重复地址可导出）")
+
+
 def _contains_safe(s, q):
     return s.astype(str).str.contains(re.escape(q), case=False, na=False)
 
@@ -1170,11 +1244,11 @@ if q_name:
 if q_addr:
     has_query = True
     addr_mask = (
-        _contains_safe(points['Address'], q_addr) |
-        _contains_safe(points.get('City',   pd.Series("", index=points.index)),   q_addr) |
-        _contains_safe(points.get('County', pd.Series("", index=points.index)),   q_addr) |
-        _contains_safe(points.get('ZIP',    pd.Series("", index=points.index)),   q_addr) |
-        _contains_safe(points.get('State',  pd.Series("", index=points.index)),   q_addr)
+    _contains_safe(points['Address'], q_addr) |
+    _contains_safe(points.get('City',   pd.Series("", index=points.index)),   q_addr) |
+    _contains_safe(points.get('County', pd.Series("", index=points.index)),   q_addr) |
+    _contains_safe(points.get('ZIP',    pd.Series("", index=points.index)),   q_addr) |
+    _contains_safe(points.get('State',  pd.Series("", index=points.index)),   q_addr)
     )
     matched = matched[addr_mask]
 search_active = bool(has_query) and (len(matched) > 0)
@@ -1543,7 +1617,6 @@ else:
                 popup=_popup_for_row(row),
                 tooltip=_s(row.get('Name',''))
             ).add_to(workers_fg)
-
 
 
 
