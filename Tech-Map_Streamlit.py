@@ -632,6 +632,10 @@ with st.sidebar:
         st.slider("Dot radius (px)", 2, 12,
           int(st.session_state.get("perf_fast_radius", 8)), 1,
           key="perf_fast_radius")
+        st.slider("INHOUSE big-icon cap", 500, 8000,
+          int(st.session_state.get("perf_inhouse_icon_cap", 4700)), 100,
+          key="perf_inhouse_icon_cap")
+
 
 with st.sidebar:
     st.markdown("---")
@@ -1593,103 +1597,80 @@ if use_cluster:
         ).add_to(target_layer)
 
 
-
-# Non-cluster mode (fast dots & static optimization)
+# === Non-cluster mode (hardened with INHOUSE big icon) ===
 else:
-    dot_r = int(st.session_state.get("perf_fast_radius", 8))
-
-    # 一定要先算出 n_points，再做兜底判断
+    dot_r = int(st.session_state.get("perf_fast_radius", 7))
     n_points = len(points)
-    EXTREME_STATIC = (USE_STATIC_MAP and n_points >= int(st.session_state.get("perf_fast_threshold", 2500)))
-
-    # 读取当前设置
+    HARD_CAP = int(st.session_state.get("perf_noncluster_cap", 12000))   # 全局硬上限（防爆）
+    INHOUSE_ICON_CAP = int(st.session_state.get("perf_inhouse_icon_cap", 2000))  # INHOUSE 使用大图标的上限
     fast_mode = st.session_state.get("perf_fast_dots", True)
 
-    # 兜底：若用户关闭快点模式且点数很大，临时启用，防止浏览器挂掉导致空白
-    if (not fast_mode) and n_points > 1200:
-        st.warning("Too many points without clustering; auto-enabled fast dots mode to prevent blank canvas.")
-        fast_mode = True
+    # 超上限：抽样，避免浏览器崩溃 -> 空白
+    if n_points > HARD_CAP:
+        st.warning(f"Too many points without clustering ({n_points:,}); sampled to {HARD_CAP:,} to keep the map responsive.")
+        points = points.sample(HARD_CAP, random_state=0).copy()
+        n_points = len(points)
 
+    EXTREME_STATIC = (USE_STATIC_MAP and n_points >= int(st.session_state.get("perf_fast_threshold", 2500)))
 
-    def _popup_for_row(row):
-        return make_worker_popup(
-            name=row.get('Name',''),
-            level=row.get('Level',''),
-            address=_full_address_from_row(row),
-            distance_text=popup_distance_text(row['LatAdj'], row['LngAdj'], prefer_drive=False),
-            contact=row.get('Contact'),
-            email=row.get('Email'),
-            phone=row.get('Phone'),
-            note=row.get('Note'),
-            is_cold=row.get('IsColdFlag', False),
-            is_hot=row.get('IsHotFlag',  False),
-        )
+    # 轻量 popup
+    def _lite_popup_for_row(row):
+        return make_lite_popup_row(row)
 
-    if EXTREME_STATIC:
-        for _, row in points.iterrows():
-            lvl = int(row['Level']) if not pd.isna(row['Level']) else None
-            base_color = LEVEL_COLORS.get(lvl, '#3388ff')
+    def _add_circle(row, base_color, radius=None):
+        folium.CircleMarker(
+            location=[row['LatAdj'], row['LngAdj']],
+            radius=(radius or dot_r),
+            color=None, stroke=False,
+            fill=True, fill_color=base_color, fill_opacity=0.8,
+            tooltip=_s(row.get('Name','')),
+            popup=_lite_popup_for_row(row)
+        ).add_to(workers_fg)
 
-            if _is_inhouse(row.get('Name','')):
-                icon = _make_marker_icon('#1E90FF', larger=True)
-                folium.Marker(
-                    location=[row['LatAdj'], row['LngAdj']],
-                    icon=icon,
-                    tooltip=_s(row.get('Name','')),
-                    popup=_popup_for_row(row)
-                ).add_to(workers_fg)
-            else:
-                folium.CircleMarker(
-                    location=[row['LatAdj'], row['LngAdj']],
-                    radius=dot_r,
-                    color=base_color,
-                    fill=True,
-                    fill_color=base_color, 
-                    fill_opacity=0.85,
-                    weight=0,
-                    tooltip=_s(row.get('Name','')),
-                    popup=_popup_for_row(row)
-                ).add_to(workers_fg)
-        st.caption(f"🧩 Extreme static optimization: {n_points:,} points (dots still have full popups; HTML may be large)")
-
-    elif fast_mode:
-        for _, row in points.iterrows():
-            lvl = int(row['Level']) if not pd.isna(row['Level']) else None
-            base_color = LEVEL_COLORS.get(lvl, '#3388ff')
-
-            if _is_inhouse(row.get('Name','')):
-                icon = _make_marker_icon('#1E90FF', larger=True)
-                folium.Marker(
-                    location=[row['LatAdj'], row['LngAdj']],
-                    icon=icon,
-                    tooltip=_s(row.get('Name','')),
-                    popup=_popup_for_row(row)
-                ).add_to(workers_fg)
-            else:
-                folium.CircleMarker(
-                    location=[row['LatAdj'], row['LngAdj']],
-                    radius=dot_r,
-                    color=base_color,
-                    fill=True,
-                    fill_color=base_color, 
-                    fill_opacity=0.85,
-                    weight=0,
-                    tooltip=_s(row.get('Name','')),
-                    popup=_popup_for_row(row)
-                ).add_to(workers_fg)
-
-    else:
-        for _, row in points.iterrows():
-            lvl = int(row['Level']) if not pd.isna(row['Level']) else None
-            base_color = LEVEL_COLORS.get(lvl, '#3388ff')
-            larger = _is_inhouse(row.get('Name',''))
-            icon = _make_marker_icon('#1E90FF' if larger else base_color, larger=larger)
+    def _add_inhouse(row):
+        # 点数不大 → 用大图钉；过多 → 退化成更醒目的蓝色大圆点
+        if n_points <= INHOUSE_ICON_CAP:
+            icon = _make_marker_icon('#1E90FF', larger=True)
             folium.Marker(
                 location=[row['LatAdj'], row['LngAdj']],
                 icon=icon,
-                popup=_popup_for_row(row),
-                tooltip=_s(row.get('Name',''))
+                tooltip=_s(row.get('Name','')),
+                popup=_lite_popup_for_row(row)
             ).add_to(workers_fg)
+        else:
+            _add_circle(row, '#1E90FF', radius=dot_r + 3)
+
+    if EXTREME_STATIC:
+        # 极端静态：普通点用圆点；INHOUSE 仍保留（受 INHOUSE_ICON_CAP 控制）
+        for _, row in points.iterrows():
+            lvl = int(row['Level']) if not pd.isna(row['Level']) else None
+            base_color = LEVEL_COLORS.get(lvl, '#3388ff')
+            if _is_inhouse(row.get('Name','')):
+                _add_inhouse(row)
+            else:
+                _add_circle(row, base_color)
+        st.caption(f"🧩 Extreme static optimization: {n_points:,} points (lightweight dots & popups)")
+
+    elif fast_mode:
+        # 快速模式：同上
+        for _, row in points.iterrows():
+            lvl = int(row['Level']) if not pd.isna(row['Level']) else None
+            base_color = LEVEL_COLORS.get(lvl, '#3388ff')
+            if _is_inhouse(row.get('Name','')):
+                _add_inhouse(row)
+            else:
+                _add_circle(row, base_color)
+
+    else:
+        # 常规模式（点不多）：INHOUSE 大图钉，其它用圆点
+        for _, row in points.iterrows():
+            lvl = int(row['Level']) if not pd.isna(row['Level']) else None
+            base_color = LEVEL_COLORS.get(lvl, '#3388ff')
+            if _is_inhouse(row.get('Name','')):
+                _add_inhouse(row)
+            else:
+                _add_circle(row, base_color)
+
 
 # ======================
 # Search matches: red flags
