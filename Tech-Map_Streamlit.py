@@ -1596,11 +1596,22 @@ if use_cluster:
             tooltip=_s(row.get('Name',''))
         ).add_to(target_layer)
 
-
 # === Non-cluster mode (hardened with INHOUSE big icon) ===
 else:
+    # —— 关键：非聚合也按 Level 分图层（确保 lvl_groups_nc / others_fg_nc 在本分支里创建）——
+    present_levels_nc = (
+        sorted(points['Level'].dropna().astype(int).unique().tolist())
+        if not points.empty else []
+    )
+    lvl_groups_nc = {
+        int(lvl): folium.FeatureGroup(name=f"Level {int(lvl)}", show=True).add_to(m)
+        for lvl in present_levels_nc
+    }
+    others_fg_nc = folium.FeatureGroup(name="Others (no level)", show=True).add_to(m)
+
     dot_r = int(st.session_state.get("perf_fast_radius", 7))
     n_points = len(points)
+
     HARD_CAP = int(st.session_state.get("perf_noncluster_cap", 12000))   # 全局硬上限（防爆）
     INHOUSE_ICON_CAP = int(st.session_state.get("perf_inhouse_icon_cap", 2000))  # INHOUSE 使用大图标的上限
     fast_mode = st.session_state.get("perf_fast_dots", True)
@@ -1611,23 +1622,25 @@ else:
         points = points.sample(HARD_CAP, random_state=0).copy()
         n_points = len(points)
 
+
     EXTREME_STATIC = (USE_STATIC_MAP and n_points >= int(st.session_state.get("perf_fast_threshold", 2500)))
 
     # 轻量 popup
     def _lite_popup_for_row(row):
         return make_lite_popup_row(row)
 
-    def _add_circle(row, base_color, radius=None):
+    def _add_circle(row, base_color, target_layer, radius=None):
         folium.CircleMarker(
             location=[row['LatAdj'], row['LngAdj']],
             radius=(radius or dot_r),
-            color=None, stroke=False,
+            stroke=False,           # ← 关闭描边
+            weight=0,            
             fill=True, fill_color=base_color, fill_opacity=0.8,
             tooltip=_s(row.get('Name','')),
             popup=_lite_popup_for_row(row)
-        ).add_to(workers_fg)
+        ).add_to(target_layer)
 
-    def _add_inhouse(row):
+    def _add_inhouse(row, target_layer):
         # 点数不大 → 用大图钉；过多 → 退化成更醒目的蓝色大圆点
         if n_points <= INHOUSE_ICON_CAP:
             icon = _make_marker_icon('#1E90FF', larger=True)
@@ -1636,40 +1649,47 @@ else:
                 icon=icon,
                 tooltip=_s(row.get('Name','')),
                 popup=_lite_popup_for_row(row)
-            ).add_to(workers_fg)
+            ).add_to(target_layer)
         else:
-            _add_circle(row, '#1E90FF', radius=dot_r + 3)
+            _add_circle(row, '#1E90FF', target_layer, radius=dot_r + 3)
+
+
+
 
     if EXTREME_STATIC:
-        # 极端静态：普通点用圆点；INHOUSE 仍保留（受 INHOUSE_ICON_CAP 控制）
         for _, row in points.iterrows():
             lvl = int(row['Level']) if not pd.isna(row['Level']) else None
             base_color = LEVEL_COLORS.get(lvl, '#3388ff')
+            target_layer = lvl_groups_nc.get(lvl, others_fg_nc)
+
             if _is_inhouse(row.get('Name','')):
-                _add_inhouse(row)
+                _add_inhouse(row, target_layer)
             else:
-                _add_circle(row, base_color)
+                _add_circle(row, base_color, target_layer)
+
         st.caption(f"🧩 Extreme static optimization: {n_points:,} points (lightweight dots & popups)")
 
     elif fast_mode:
-        # 快速模式：同上
         for _, row in points.iterrows():
             lvl = int(row['Level']) if not pd.isna(row['Level']) else None
             base_color = LEVEL_COLORS.get(lvl, '#3388ff')
+            target_layer = lvl_groups_nc.get(lvl, others_fg_nc)
+
             if _is_inhouse(row.get('Name','')):
-                _add_inhouse(row)
+                _add_inhouse(row, target_layer)
             else:
-                _add_circle(row, base_color)
+                _add_circle(row, base_color, target_layer)
 
     else:
-        # 常规模式（点不多）：INHOUSE 大图钉，其它用圆点
         for _, row in points.iterrows():
             lvl = int(row['Level']) if not pd.isna(row['Level']) else None
             base_color = LEVEL_COLORS.get(lvl, '#3388ff')
+            target_layer = lvl_groups_nc.get(lvl, others_fg_nc)
+
             if _is_inhouse(row.get('Name','')):
-                _add_inhouse(row)
+                _add_inhouse(row, target_layer)
             else:
-                _add_circle(row, base_color)
+                _add_circle(row, base_color, target_layer)
 
 
 # ======================
