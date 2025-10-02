@@ -22,34 +22,8 @@ def _safe_rerun():
     except AttributeError:
         st.experimental_rerun()
 
-# ---------- Regex ----------
-HVAC_PAT_STR = (
-    r"(hvac|air\s*conditioning|\bac\b|a/?c|heating|heat\s*pump|furnace|boiler|"
-    r"refrigeration|cooling|ventilation|duct|chiller|mini\s*split|split\s*system|"
-    r"thermo\s*stat|compressor|refrigerant|制冷|制热|暖通|空调|冷冻|冷库|冷气|冷暖|暖气|通风)"
-)
-BLACK_PAT_STR = (
-    r"(?:at[&\s]*t|verizon|t[-\s]*mobile|cricket|boost\s*mobile|"
-    r"metro(?:\s*pcs|\s*by\s*t[-\s]*mobile)?|xfinity|comcast|spectrum|sprint|"
-    r"u\.?\s*s\.?\s*cellular|cell(?:ular)?|mobile|phone|iphone|android|"
-    r"computer|pc|laptop|electronics|tv|best\s*buy|geek\s*squad|apple\s*store|"
-    r"samsung|gamestop|"
-    r"auto|car|truck|dealer(?:ship)?|motor\s*sports|body\s*shop|collision|"
-    r"brake|tire|alignment|transmission|oil\s*change|smog|muffler|lube|"
-    r"towing|tow|dismantler|parts?|quick\s*lube|"
-    r"pep\s*boys|firestone|goodyear|jiffy\s*lube|valvoline|mobil\s*1|"
-    r"honda|toyota|chevrolet|ford"
-    r")"
-)
-HVAC_RE  = re.compile(HVAC_PAT_STR,  re.IGNORECASE)
-BLACK_RE = re.compile(BLACK_PAT_STR, re.IGNORECASE)
-
 # ---------- Icons ----------
 def ring_pin_icon(color_hex: str = "#1E90FF", size_h_px: int = 38):
-    """
-    color_hex: ring color
-    size_h_px: icon height in px (width auto 0.75 ratio)
-    """
     w = int(size_h_px * 0.75)
     html = f"""
     <svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{size_h_px}" viewBox="0 0 48 64"
@@ -61,7 +35,6 @@ def ring_pin_icon(color_hex: str = "#1E90FF", size_h_px: int = 38):
     """
     return folium.DivIcon(html=html, icon_size=(w, size_h_px), icon_anchor=(w // 2, int(size_h_px * 0.92)))
 
-# Back-compat alias
 def blue_wrench_icon(size_px: int = 24):
     return ring_pin_icon("#8B4513", size_h_px=max(22, int(size_px * 1.2)))
 
@@ -87,6 +60,18 @@ def customer_pin_icon(size_px: int = 42):
         icon_size=(size_px, size_px),
         icon_anchor=(size_px // 2, int(size_px * 0.92)),
     )
+
+def customer_house_icon(size_px: int = 24):
+    return folium.DivIcon(
+        html=f"""
+        <div style="filter: drop-shadow(0 0 2px rgba(0,0,0,.35));">
+          <span style="font-size:{size_px}px; line-height:1;">🏠</span>
+        </div>
+        """,
+        icon_size=(size_px, size_px),
+        icon_anchor=(size_px // 2, int(size_px * 0.90)),
+    )
+    
 
 # ---------- Read Google Key ----------
 def _read_api_key():
@@ -130,7 +115,8 @@ div[data-testid="stHorizontalBlock"]{ margin-bottom:.1rem!important; }
 html, body, .stApp, .main .block-container { font-size: 13px !important; }
 section[data-testid="stSidebar"], section[data-testid="stSidebar"] * { font-size: 12.5px !important; }
 
-[data-testid="stMetricValue"] { font-size: 18px !important; line-height:1.1!important; font-weight:700!important; }
+/* 指标数字调小 */
+[data-testid="stMetricValue"] { font-size: 16px !important; line-height:1.1!important; font-weight:700!important; }
 [data-testid="stMetricLabel"] { font-size: 12px !important; line-height:1.1!important; }
 [data-testid="stMetricDelta"] { font-size: 10px !important; line-height:1.1!important; }
 div[data-testid="stMetric"] > div { padding-top:2px!important; padding-bottom:2px!important; margin:0!important; }
@@ -171,9 +157,25 @@ if "data_dir_path" not in st.session_state:
 data_dir = st.session_state.data_dir_path
 os.makedirs(data_dir, exist_ok=True)
 
-def _list_files():
+def _list_tech_files():
     try:
-        files = [f for f in os.listdir(data_dir) if f.lower().endswith(SUPPORT_EXTS)]
+        files = []
+        for f in os.listdir(data_dir):
+            fl = f.lower()
+            if not fl.endswith(SUPPORT_EXTS):
+                continue
+            if any(k in fl for k in ["customer", "customers", "cust_", "cust-", "_cust"]):
+                continue
+            files.append(f)
+        return sorted(files, key=lambda f: os.path.getmtime(os.path.join(data_dir, f)), reverse=True)
+    except Exception:
+        return []
+
+def _list_customer_files():
+    try:
+        files = [f for f in os.listdir(data_dir)
+                 if f.lower().endswith(SUPPORT_EXTS)
+                 and any(k in f.lower() for k in ["customer","customers","cust_","cust-","_cust"])]
         return sorted(files, key=lambda f: os.path.getmtime(os.path.join(data_dir, f)), reverse=True)
     except Exception:
         return []
@@ -186,9 +188,11 @@ def _load_df(path: str) -> pd.DataFrame:
             return pd.read_csv(path, encoding="latin-1")
     return pd.read_excel(path)
 
-def _save_uploaded(uploaded, folder: str) -> str:
+def _save_uploaded(uploaded, folder: str, prefix: str | None = None) -> str:
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     base, ext = os.path.splitext(uploaded.name)
+    if prefix:
+        base = f"{prefix}_{base}"
     fpath = os.path.join(folder, f"{base}_{ts}{ext}")
     with open(fpath, "wb") as f:
         f.write(uploaded.read())
@@ -201,8 +205,13 @@ if "df" not in st.session_state:
     st.session_state.df = None
 if "data_meta" not in st.session_state:
     st.session_state.data_meta = {}
+if "cust_df" not in st.session_state:
+    st.session_state.cust_df = None
+if "cust_meta" not in st.session_state:
+    st.session_state.cust_meta = {}
 
-_files = _list_files()
+# 自动加载最新技师文件（排除客户）
+_files = _list_tech_files()
 if st.session_state.df is None and _files:
     latest_path = os.path.join(data_dir, _files[0])
     try:
@@ -215,9 +224,24 @@ if st.session_state.df is None and _files:
     except Exception as e:
         st.error(f"Failed to load {_files[0]}: {e}")
 
+# 自动加载最新客户文件
+_cfiles = _list_customer_files()
+if st.session_state.cust_df is None and _cfiles:
+    c_latest = os.path.join(data_dir, _cfiles[0])
+    try:
+        st.session_state.cust_df = _load_df(c_latest)
+        st.session_state.cust_meta = {
+            "filename": _cfiles[0],
+            "path": c_latest,
+            "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "rows": len(st.session_state.cust_df)
+        }
+    except Exception as e:
+        st.warning(f"Customers auto-load failed: {e}")
+
 df = st.session_state.get("df", None)
 if df is None:
-    # Sidebar data source (when no data yet)
+    # Sidebar data source（首次无数据时）
     with st.sidebar:
         st.markdown("---")
         with st.expander("📁 Data Source (fixed folder)", expanded=True):
@@ -226,18 +250,16 @@ if df is None:
                 st.session_state.data_dir_path = new_dir
             os.makedirs(st.session_state.data_dir_path, exist_ok=True)
 
-            files2 = [f for f in os.listdir(st.session_state.data_dir_path) if f.lower().endswith(SUPPORT_EXTS)]
-            files2 = sorted(files2, key=lambda f: os.path.getmtime(os.path.join(st.session_state.data_dir_path, f)), reverse=True)
-
+            st.markdown("**Technicians**")
+            files2 = _list_tech_files()
             if files2:
-                pick = st.selectbox("Pick saved data file", files2, index=0)
-                if st.button("Load selected"):
+                pick = st.selectbox("Pick saved tech file", files2, index=0)
+                if st.button("Load selected (tech)"):
                     try:
                         path = os.path.join(st.session_state.data_dir_path, pick)
                         st.session_state.df = _load_df(path)
                         st.session_state.data_meta = {
-                            "filename": pick,
-                            "path": path,
+                            "filename": pick, "path": path,
                             "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         }
                         st.success(f"Loaded: {pick}")
@@ -245,14 +267,13 @@ if df is None:
                     except Exception as e:
                         st.error(f"Load failed: {e}")
 
-            new_file = st.file_uploader("Upload new data (saved into folder)", type=['csv','xlsx','xls'])
+            new_file = st.file_uploader("Upload tech data (save into folder)", type=['csv','xlsx','xls'])
             if new_file is not None:
                 try:
-                    saved_path = _save_uploaded(new_file, st.session_state.data_dir_path)
+                    saved_path = _save_uploaded(new_file, st.session_state.data_dir_path, prefix="TECH")
                     st.session_state.df = _load_df(saved_path)
                     st.session_state.data_meta = {
-                        "filename": os.path.basename(saved_path),
-                        "path": saved_path,
+                        "filename": os.path.basename(saved_path), "path": saved_path,
                         "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
                     st.success(f"Uploaded & loaded: {os.path.basename(saved_path)}")
@@ -260,11 +281,106 @@ if df is None:
                 except Exception as e:
                     st.error(f"Upload/read failed: {e}")
 
-    st.warning("No dataset loaded. Use the left panel (**📁 Data Source**) to pick or upload a file.")
+            st.markdown("---")
+            st.markdown("**Customers**")
+            cfiles = _list_customer_files()
+            if cfiles:
+                cpick = st.selectbox("Pick saved customer file", cfiles, index=0, key="pick_cust_file_top")
+                if st.button("Load selected (customers)", key="btn_load_cust_top"):
+                    try:
+                        cpath = os.path.join(st.session_state.data_dir_path, cpick)
+                        st.session_state.cust_df = _load_df(cpath)
+                        st.session_state.cust_meta = {
+                            "filename": cpick, "path": cpath,
+                            "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "rows": len(st.session_state.cust_df)
+                        }
+                        st.success(f"Customers loaded: {cpick}")
+                        _safe_rerun()
+                    except Exception as e:
+                        st.error(f"Load customers failed: {e}")
+
+            cust_file = st.file_uploader("Upload customers (save into folder)", type=['csv','xlsx','xls'], key="cust_uploader_top")
+            if cust_file is not None:
+                try:
+                    c_saved = _save_uploaded(cust_file, st.session_state.data_dir_path, prefix="CUSTOMERS")
+                    cdf = _load_df(c_saved)
+                    st.session_state.cust_df = cdf
+                    st.session_state.cust_meta = {
+                        "filename": os.path.basename(c_saved), "path": c_saved,
+                        "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "rows": len(cdf)
+                    }
+                    st.success(f"Customers uploaded & loaded: {os.path.basename(c_saved)}")
+                    _safe_rerun()
+                except Exception as e:
+                    st.error(f"Customers upload/read failed: {e}")
+
+    st.warning("No technician dataset loaded. Use the left panel (**📁 Data Source**) to pick or upload a file.")
     st.stop()
 
 # ======================
-# Cached refs
+# ==== PERF：全局性能参数（可通过侧栏调节） ====
+# ======================
+DEFAULT_MAX_TECH_MARKERS = 500
+DEFAULT_MAX_CUST_MARKERS = 200
+DEFAULT_NEAR_PIN_BOOST_MI = 60
+DEFAULT_ZOOM_GRID_DECIMALS = (2, 3)
+
+# ==== PERF：抽稀工具函数 ====
+def _haversine_batch(lat1, lng1, lat_arr, lng_arr):
+    R = 3958.7613
+    p1 = np.radians([lat1, lng1])
+    p2 = np.radians(np.vstack([lat_arr, lng_arr]).T)
+    dphi = p2[:,0] - p1[0]
+    dlmb = p2[:,1] - p1[1]
+    a = np.sin(dphi/2)**2 + np.cos(p1[0])*np.cos(p2[:,0])*np.sin(dlmb/2)**2
+    return 2*R*np.arcsin(np.sqrt(a))  # miles
+
+def _priority_mask(df_points, matched_idx, inhouse_mask, cust_pin, near_radius_mi):
+    keep = pd.Series(False, index=df_points.index)
+    if matched_idx is not None and len(matched_idx) > 0:
+        keep.loc[matched_idx] = True
+    if inhouse_mask is not None and inhouse_mask.any():
+        keep = keep | inhouse_mask
+    if cust_pin:
+        lat = df_points['Latitude'].to_numpy(dtype=float)
+        lng = df_points['Longitude'].to_numpy(dtype=float)
+        d = _haversine_batch(cust_pin['lat'], cust_pin['lng'], lat, lng)
+        keep = keep | (d <= near_radius_mi)
+    return keep
+
+def _grid_key(lat, lng, decimals):
+    return np.round(lat, decimals=decimals).astype(np.float32), np.round(lng, decimals=decimals).astype(np.float32)
+
+def thin_points(df_points, target_max, matched_idx=None, inhouse_mask=None, cust_pin=None,
+                near_radius_mi=DEFAULT_NEAR_PIN_BOOST_MI, decimals_candidates=DEFAULT_ZOOM_GRID_DECIMALS):
+    if len(df_points) <= target_max:
+        return df_points.index
+    keep_mask = _priority_mask(df_points, matched_idx, inhouse_mask, cust_pin, near_radius_mi)
+    keep_idx = df_points.index[keep_mask]
+    remain = df_points.index[~keep_mask]
+    if len(keep_idx) >= target_max:
+        return keep_idx[:target_max]
+    quota = target_max - len(keep_idx)
+    rest_df = df_points.loc[remain]
+    chosen = []
+    for dec in decimals_candidates + (4, 5):
+        latg, lngg = _grid_key(rest_df['Latitude'].to_numpy(float),
+                               rest_df['Longitude'].to_numpy(float), dec)
+        grid = pd.DataFrame({'i': rest_df.index, 'latg': latg, 'lngg': lngg})
+        sampled = grid.groupby(['latg','lngg'], sort=False).head(1)['i'].tolist()
+        chosen = sampled
+        if len(chosen) >= quota * 0.95:
+            break
+    chosen = chosen[:quota]
+    return pd.Index(keep_idx.tolist() + chosen)
+
+def should_disable_popups(n_points, cutoff=2800):
+    return n_points > cutoff
+
+# ======================
+# Cached refs & helpers
 # ======================
 @st.cache_data(show_spinner=False)
 def load_zip_all_cached():
@@ -279,14 +395,10 @@ def build_city_county_master(zip_all_df: pd.DataFrame):
     cities = (zip_all_df.groupby(['state_code','place_name'], as_index=False)
               .agg(cLat=('latitude','mean'), cLng=('longitude','mean')))
     cities.rename(columns={'state_code':'State','place_name':'City'}, inplace=True)
-
     counties = (zip_all_df.dropna(subset=['county_name'])
                 .groupby(['state_code','county_name'], as_index=False)
-                .agg(cLat=('latitude','mean'),
-                     cLng=('longitude','mean'),
-                     ZIP_count=('postal_code','nunique')))
+                .agg(cLat=('latitude','mean'), cLng=('longitude','mean'), ZIP_count=('postal_code','nunique')))
     counties.rename(columns={'state_code':'State','county_name':'County'}, inplace=True)
-
     zip_map = (zip_all_df.dropna(subset=['county_name'])
                .groupby(['state_code','county_name'])['postal_code']
                .apply(lambda s: sorted(set(s))).reset_index()\
@@ -306,24 +418,17 @@ def load_us_states_geojson_cached(geojson_path):
         json.dump(data, f)
     return data
 
-# ---- Address helpers ----
+# Address helpers
 LATLNG_RE = re.compile(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$')
-_US_STATES = {
-    "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS",
-    "KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY",
-    "NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC","PR"
-}
+_US_STATES = {"AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC","PR"}
 
 def _smart_zip_from_text(s: str):
     try:
-        if s is None or pd.isna(s):
-            return None
+        if s is None or pd.isna(s): return None
     except Exception:
-        if s is None:
-            return None
+        if s is None: return None
     s = str(s).strip()
-    if not s:
-        return None
+    if not s: return None
     m = re.search(r'\b([A-Z]{2})\s*,?\s*(\d{5})(?:-\d{4})?\b', s)
     if m and m.group(1).upper() in _US_STATES:
         return m.group(2)
@@ -333,8 +438,7 @@ def _smart_zip_from_text(s: str):
 @st.cache_data(show_spinner=False, ttl=3600)
 def geocode_address(addr: str, key: str | None):
     addr = (addr or "").strip()
-    if not addr:
-        return None
+    if not addr: return None
     m = LATLNG_RE.match(addr)
     if m:
         lat = float(m.group(1)); lng = float(m.group(2))
@@ -346,28 +450,19 @@ def geocode_address(addr: str, key: str | None):
             nomi = pgeocode.Nominatim("us")
             info = nomi.query_postal_code(zip5)
             if pd.notna(info.latitude) and pd.notna(info.longitude):
-                return {
-                    "lat": float(info.latitude), "lng": float(info.longitude),
-                    "formatted": f"ZIP {zip5}",
-                    "source": "zip"
-                }
+                return {"lat": float(info.latitude), "lng": float(info.longitude), "formatted": f"ZIP {zip5}", "source": "zip"}
         except Exception:
             pass
     if key:
         try:
-            r = requests.get(
-                "https://maps.googleapis.com/maps/api/geocode/json",
-                params={"address": addr, "key": key, "language": "en"},
-                timeout=15
-            )
+            r = requests.get("https://maps.googleapis.com/maps/api/geocode/json",
+                             params={"address": addr, "key": key, "language": "en"},
+                             timeout=15)
             j = r.json()
             if j.get("status") == "OK" and j.get("results"):
                 g = j["results"][0]; loc = g["geometry"]["location"]
-                return {
-                    "lat": float(loc["lat"]), "lng": float(loc["lng"]),
-                    "formatted": g.get("formatted_address", addr),
-                    "source": "google"
-                }
+                return {"lat": float(loc["lat"]), "lng": float(loc["lng"]),
+                        "formatted": g.get("formatted_address", addr), "source": "google"}
         except Exception:
             pass
     headers = {"User-Agent": "tech-map/1.0 (contact: support@example.com)"}
@@ -388,26 +483,26 @@ def geocode_address(addr: str, key: str | None):
 def _on_cust_addr_change():
     addr = st.session_state.get("cust_quick_addr", "").strip()
     if not addr:
-        st.session_state.pop("cust_quick_pin", None)
-        return
+        st.session_state.pop("cust_quick_pin", None); return
     gq = geocode_address(addr, GOOGLE_PLACES_KEY)
     if not gq:
         st.session_state["_last_cust_geocode_msg"] = "Geocoding failed: try adding city/state or use coords like 34.0522,-118.2437."
-        st.session_state.pop("cust_quick_pin", None)
-        return
+        st.session_state.pop("cust_quick_pin", None); return
     st.session_state['cust_quick_pin'] = {"lat": gq["lat"], "lng": gq["lng"], "formatted": gq.get("formatted", addr), "source": gq.get("source","")}
     pad = 0.2
     st.session_state["_zoom_bounds"] = [[gq["lat"]-pad, gq["lng"]-pad],[gq["lat"]+pad, gq["lng"]+pad]]
-    src = gq.get("source","geocoder")
-    st.session_state["_last_cust_geocode_msg"] = f"Located: {gq.get('formatted', addr)} (source: {src})"
+    st.session_state["_last_cust_geocode_msg"] = f"Located: {gq.get('formatted', addr)} (source: {gq.get('source','geocoder')})"
 
 # ======================
-# Data cleaning/fill
+# Data cleaning/fill (Technicians)
 # ======================
+df = st.session_state.df.copy()
 df.columns = [str(c).strip() for c in df.columns]
+
+# 别名映射（含 Level）
 alias_map = {}
 for c in list(df.columns):
-    lc = c.lower()
+    lc = c.lower().strip()
     if lc in {"lat","latitude","纬度","y","y_coord","ycoordinate","lat_dd","latitudes","lattitude"}:
         alias_map[c] = "Latitude"
     if lc in {"lon","lng","long","longitude","经度","x","x_coord","xcoordinate","lon_dd","longitudes","longtitude"}:
@@ -420,6 +515,9 @@ for c in list(df.columns):
         alias_map[c] = "Note"
     if lc in {"电话","phone","手机号","手机","联系电话","phone number","tel","telephone"}:
         alias_map[c] = "Phone"
+    if lc in {"level", "等级", "级别", "lv", "lvl", "tier", "rank", "工级", "层级"}:
+        alias_map[c] = "Level"
+
 if alias_map:
     df.rename(columns=alias_map, inplace=True)
 
@@ -429,20 +527,18 @@ for col in ["Contact","Email","Note","Phone"]:
 
 def _pick_col(cols):
     for c in cols:
-        if c in df.columns:
-            return c
+        if c in df.columns: return c
     return None
+
 lat_col = _pick_col(['Latitude', 'Lat', 'latitude', 'lat'])
 lon_col = _pick_col(['Longitude', 'Lon', 'Lng', 'longitude', 'lon', 'lng'])
 
 def _smart_zip_from_text_wrap(s):
     z = _smart_zip_from_text(s)
     try:
-        if z is None or pd.isna(z) or str(z).strip() == "":
-            return pd.NA
+        if z is None or pd.isna(z) or str(z).strip() == "": return pd.NA
     except Exception:
-        if z is None or str(z).strip() == "":
-            return np.nan
+        if z is None or str(z).strip() == "": return np.nan
     return z
 
 # backfill lat/lng from ZIP if needed
@@ -466,10 +562,8 @@ if not lat_col or not lon_col:
             ref['postal_code'] = ref['postal_code'].astype(str).str.zfill(5)
             df = df.merge(ref, left_on='ZIP5', right_on='postal_code', how='left')
             def _to_num(x):
-                try:
-                    return float(str(x).strip().replace(',', '.'))
-                except:
-                    return np.nan
+                try: return float(str(x).strip().replace(',', '.'))
+                except: return np.nan
             df['Latitude']  = pd.to_numeric(df.get('Latitude'), errors='coerce')
             df['Longitude'] = pd.to_numeric(df.get('Longitude'), errors='coerce')
             df['Latitude']  = df['Latitude'].where(df['Latitude'].notna(),  df['latitude'].map(_to_num))
@@ -485,8 +579,7 @@ if not lat_col or not lon_col:
 
 def clean_num(x):
     if pd.isna(x): return np.nan
-    s = str(x).strip().replace(',', '.')
-    s = re.sub(r'[^0-9\.\-]', '', s)
+    s = str(x).strip().replace(',', '.'); s = re.sub(r'[^0-9\.\-]', '', s)
     try: return float(s)
     except: return np.nan
 
@@ -494,38 +587,36 @@ df['Latitude']  = df[lat_col].apply(clean_num)
 df['Longitude'] = df[lon_col].apply(clean_num)
 
 if 'Level' not in df.columns:
-    st.error("Missing required column: Level")
-    st.stop()
+    guess = next((c for c in df.columns if re.search(r'(?i)level|等级|级别|lv|lvl|tier|rank', str(c))), None)
+    if guess and guess != 'Level':
+        df.rename(columns={guess: 'Level'}, inplace=True)
+if 'Level' not in df.columns:
+    st.warning("未找到 'Level' 列，已默认所有技师 Level=3。")
+    df['Level'] = 3
 
 def to_level(x):
     if pd.isna(x): return np.nan
     m = re.search(r'(\d+)', str(x))
     if not m: return np.nan
-    v = int(m.group(1))
-    return v if 1 <= v <= 7 else np.nan
+    v = int(m.group(1)); return v if 1 <= v <= 7 else np.nan
 
 df['Level'] = pd.to_numeric(df['Level'].apply(to_level), errors='coerce').astype('Int64')
 df.loc[~df['Level'].between(1, 7), 'Level'] = pd.NA
+df = df[(~df['Level'].eq(7)) | (df['Level'].isna())].copy()
 
 for need in ['Name', 'Address']:
     if need not in df.columns:
-        st.error(f"Missing required column: {need}")
-        st.stop()
+        st.error(f"Missing required column: {need}"); st.stop()
 
 zip_candidates = ['ZIP','Zip','zip','ZipCode','ZIP Code','PostalCode','Postal Code','postcode','Postcode','邮编']
 zip_col = next((c for c in zip_candidates if c in df.columns), None)
-if zip_col is not None:
-    df['ZIP'] = df[zip_col]
-else:
-    df['ZIP'] = df['Address'].apply(_smart_zip_from_text_wrap)
-df['ZIP']  = df['ZIP'].apply(lambda x: _smart_zip_from_text_wrap(x)).astype('string')
+df['ZIP']  = (df[zip_col] if zip_col is not None else df['Address'].apply(_smart_zip_from_text_wrap)).astype('string')
 df['ZIP5'] = df['ZIP'].str.zfill(5)
 
 try:
     import pgeocode
 except ImportError:
-    st.error("Missing dependency pgeocode: run  `python -m pip install pgeocode`")
-    st.stop()
+    st.error("Missing dependency pgeocode: run  `python -m pip install pgeocode`"); st.stop()
 
 nomi = pgeocode.Nominatim('us')
 zip_list = df['ZIP5'].dropna().unique().tolist()
@@ -549,46 +640,94 @@ df['City']      = combine_first_series(df['place_name'], df['City']).astype('str
 df['County']    = combine_first_series(df['county_name'],df['County']).astype('string')
 df.drop(columns=['postal_code','latitude','longitude','state_code','place_name','county_name'], inplace=True, errors='ignore')
 
-# === Cold/Hot boolean normalization ===
-def _to_bool_cn_en(x):
+# ===== 冷/热 标识修复 =====
+def _to_bool_flag(x):
     try:
-        if x is None or pd.isna(x):
-            return False
+        if x is None or pd.isna(x): return False
     except Exception:
-        if x is None:
-            return False
+        if x is None: return False
     s = str(x).strip().lower()
+    return s in {'是','yes','y','true','t','1','✓','✔','√','✅','hot','cold','heat','cool','ac','heating','both','冷热','制冷','供暖'}
 
-    TRUE_TOKENS  = {'是','yes','y','true','t','1','✓','✔','√','✅'}
-    FALSE_TOKENS = {'否','no','n','false','f','0','×','x','✗','✕','❌','-',''}
+def _normalize_name(s):
+    return re.sub(r'[^a-z]', '', str(s).strip().lower())
 
-    if s in TRUE_TOKENS:  return True
-    if s in FALSE_TOKENS: return False
-    try:
-        return bool(int(s))
-    except Exception:
-        return False
+COLD_COL_HINTS = {'iscold','cold','cool','ac','hvaccold','is_cold','冷','制冷','空调','冷气'}
+HOT_COL_HINTS  = {'ishot','hot','heat','heating','hvachot','is_hot','热','供暖','暖气'}
 
-if 'IsColdFlag' not in df.columns:
-    df['IsColdFlag'] = df.get('Is Cold', pd.Series(False, index=df.index)).apply(_to_bool_cn_en)
-else:
-    df['IsColdFlag'] = df['IsColdFlag'].apply(_to_bool_cn_en)
-if 'IsHotFlag' not in df.columns:
-    df['IsHotFlag'] = df.get('Is Hot',  pd.Series(False, index=df.index)).apply(_to_bool_cn_en)
-else:
-    df['IsHotFlag'] = df['IsHotFlag'].apply(_to_bool_cn_en)
+if 'IsColdFlag' not in df.columns: df['IsColdFlag'] = False
+if 'IsHotFlag'  not in df.columns: df['IsHotFlag']  = False
+
+for c in df.columns:
+    norm = _normalize_name(c)
+    if norm in COLD_COL_HINTS:
+        df['IsColdFlag'] = df['IsColdFlag'] | df[c].apply(_to_bool_flag)
+    if norm in HOT_COL_HINTS:
+        df['IsHotFlag']  = df['IsHotFlag']  | df[c].apply(_to_bool_flag)
+
+st.session_state.df = df
 
 zip_all = load_zip_all_cached()
 cities_master, counties_master = build_city_county_master(zip_all)
 
 # ======================
-# Sidebar filters
+# 客户信息清洗/补点
+# ======================
+cust_df = st.session_state.get("cust_df", None)
+if isinstance(cust_df, pd.DataFrame) and len(cust_df) > 0:
+    cust_df = cust_df.copy()
+    cust_df.columns = [str(c).strip() for c in cust_df.columns]
+    c_alias = {}
+    for c in list(cust_df.columns):
+        lc = c.lower()
+        if lc in {"name","customer","customername","客户","客户名"}: c_alias[c] = "CName"
+        if lc in {"address","addr","地址"}: c_alias[c] = "CAddress"
+        if lc in {"latitude","lat","纬度"}: c_alias[c] = "CLatitude"
+        if lc in {"longitude","lon","lng","经度"}: c_alias[c] = "CLongitude"
+        if lc in {"contact","联系人","联络人"}: c_alias[c] = "CContact"
+    if c_alias:
+        cust_df.rename(columns=c_alias, inplace=True)
+    for col in ["CName","CAddress","CContact","CLatitude","CLongitude"]:
+        if col not in cust_df.columns:
+            cust_df[col] = pd.NA
+
+    def _cnum(x):
+        try:
+            s = str(x).strip().replace(',', '.')
+            return float(re.sub(r'[^0-9\.\-]','',s))
+        except:
+            return np.nan
+    cust_df["CLatitude"]  = pd.to_numeric(cust_df["CLatitude"], errors='coerce').map(_cnum)
+    cust_df["CLongitude"] = pd.to_numeric(cust_df["CLongitude"], errors='coerce').map(_cnum)
+
+    def _zip_from_addr(a):
+        try: a = str(a)
+        except: return None
+        return _smart_zip_from_text(a)
+
+    need = cust_df["CLatitude"].isna() | cust_df["CLongitude"].isna()
+    cust_df["CZIP"] = cust_df["CAddress"].apply(_zip_from_addr).astype('string')
+
+    zlist = cust_df["CZIP"].dropna().unique().tolist()
+    if zlist:
+        zref = nomi.query_postal_code(zlist)[["postal_code","latitude","longitude","state_code"]].dropna(subset=["latitude","longitude"])
+        zref["postal_code"] = zref["postal_code"].astype(str).str.zfill(5)
+        cust_df = cust_df.merge(zref, left_on="CZIP", right_on="postal_code", how="left")
+        cust_df["CLatitude"]  = cust_df["CLatitude"].where(cust_df["CLatitude"].notna(), cust_df["latitude"])
+        cust_df["CLongitude"] = cust_df["CLongitude"].where(cust_df["CLongitude"].notna(), cust_df["longitude"])
+        cust_df["CState"] = cust_df.get("CState", pd.Series(pd.NA, index=cust_df.index))
+        cust_df["CState"] = cust_df["CState"].where(cust_df["CState"].notna(), cust_df["state_code"])
+        cust_df.drop(columns=["postal_code","latitude","longitude","state_code"], inplace=True, errors="ignore")
+    else:
+        if "CState" not in cust_df.columns:
+            cust_df["CState"] = pd.NA
+
+    st.session_state.cust_df = cust_df
+# ======================
+# Sidebar filters + PERF 控件（第一块）
 # ======================
 with st.sidebar:
     geo_level = st.selectbox("Scope", ["County", "City"], index=0)
-
-    levels_present = sorted([int(x) for x in df['Level'].dropna().unique().tolist()]) or [1,2,3,4,5,6,7]
-    level_choice = st.selectbox('Level filter', ['All'] + levels_present, index=0)
 
     states_for_level = sorted((counties_master if geo_level.startswith("County") else cities_master)['State'].unique().tolist())
     state_choice = st.selectbox('State', ['All'] + states_for_level)
@@ -603,84 +742,56 @@ with st.sidebar:
         unit_label = "City"
     unit_choice = st.selectbox(unit_label, ['All'] + units)
 
-    st.subheader("Scoring Rules")
-    good_levels   = st.multiselect("Tech level", [1,2,3,4,5,6,7], default=[1,2,3,4,5,6])
+    level_filter_display = st.multiselect("Level filter (map)", [1,2,3,4,5,6], default=[1,2,3,4,5,6],
+                                          help="只显示所选等级（支持单选/多选）")
+
+    st.subheader("Scoring Rules (for rings)")
     radius_miles  = st.slider("Radius (mi)", 5, 50, 20, 5)
     min_good      = st.number_input("Good techs ≥ within radius", 1, 10, 2, 1)
-    only_show_units       = st.checkbox("Show only qualified areas", value=True)
-    only_show_good_points = st.checkbox("Show only good techs", value=True)
-    st.checkbox("Only duplicate addresses (same addr ≥2)", value=False, key="only_dup_addr_v3")
-    dup_export_slot = st.empty()
+    only_show_units = st.checkbox("Only show qualified areas", value=True)
 
     st.markdown("---")
-    source_mode = st.radio("Online enrichment source", ["Auto (Google first)", "Google only (faster)", "OSM only (fallback)"], index=0)
-    if "hvac_only" not in st.session_state:
-        st.session_state.hvac_only = False
-    hvac_only = st.checkbox("HVAC-only companies", value=st.session_state.hvac_only, key="hvac_only")
-    st.checkbox("Only show web-added (Level=7)", value=False, key="show_only_new")
+    perf_mode = st.selectbox(
+        "Performance",
+        ["Clustered markers (default)", "Fast dots (all techs)", "Standard markers (no cluster)"],
+        index=2,
+        help="Fast dots 显示全部维修工为小圆点，INHOUSE 用大图钉。"
+    )
+    show_all_techs = st.checkbox("Show all technicians (ignore filters)", value=(perf_mode=="Fast dots (all techs)"))
 
-    st.markdown("---")
-    with st.expander("⚡ Performance", expanded=False):
-        st.checkbox("Marker clustering (faster for many points)", key="perf_use_cluster", value=st.session_state.get("perf_use_cluster", True))
-        st.checkbox("Canvas vector render", key="perf_prefer_canvas", value=st.session_state.get("perf_prefer_canvas", True))
-        st.slider("Max rendered areas (county/city circles)", 200, 5000, int(st.session_state.get("perf_max_units", 1500)), 100, key="perf_max_units")
-        st.checkbox("Ultra-fast (dots instead of pins)", key="perf_fast_dots",
-            value=st.session_state.get("perf_fast_dots", True))
-        st.slider("Fast-mode threshold (#points)", 500, 20000,
-          int(st.session_state.get("perf_fast_threshold", 2500)), 100,
-          key="perf_fast_threshold")
-        st.slider("Dot radius (px)", 2, 12,
-          int(st.session_state.get("perf_fast_radius", 8)), 1,
-          key="perf_fast_radius")
-        st.slider("INHOUSE big-icon cap", 500, 8000,
-          int(st.session_state.get("perf_inhouse_icon_cap", 4700)), 100,
-          key="perf_inhouse_icon_cap")
+# ========= 这里初始化 / 重置 max_tech_markers_val（不渲染控件） =========
+if "max_tech_markers_val" not in st.session_state:
+    st.session_state.max_tech_markers_val = DEFAULT_MAX_TECH_MARKERS
+if st.session_state.get("last_state_for_max_tech") != state_choice:
+    st.session_state["last_state_for_max_tech"] = state_choice
+    st.session_state.max_tech_markers_val = 4000 if state_choice != "All" else DEFAULT_MAX_TECH_MARKERS
 
-
+# ======================
+# Sidebar PERF 控件（第二块，真正渲染）
+# ======================
 with st.sidebar:
+    st.markdown("**Performance Limits**")
+    cust_upper_cap = 60000 if state_choice != 'All' else 10000
+    cust_default   = 60000 if state_choice != 'All' else DEFAULT_MAX_CUST_MARKERS
+    max_tech_markers = st.number_input(
+        "Max technician markers to render",
+        min_value=500, max_value=10000, value=int(st.session_state.max_tech_markers_val), step=100,
+        key="max_tech_markers_val",
+        help="超出将自适应抽稀"
+    )
+
+    max_cust_markers = st.number_input(
+        "Max customer markers to render (state view supports up to 30k)",
+        min_value=200, max_value=cust_upper_cap, value=cust_default, step=100,
+        help="选中具体州时可放大到 30,000"
+    )
+
+    near_pin_boost   = st.slider("Keep more markers near 📍 (mi)", 20, 200, DEFAULT_NEAR_PIN_BOOST_MI, 10)
+
     st.markdown("---")
-    with st.expander("📁 Data Source (fixed folder)", expanded=False):
-        new_dir = st.text_input("Data folder path", value=st.session_state.data_dir_path)
-        if new_dir != st.session_state.data_dir_path:
-            st.session_state.data_dir_path = new_dir
-        os.makedirs(st.session_state.data_dir_path, exist_ok=True)
-
-        files2 = [f for f in os.listdir(st.session_state.data_dir_path) if f.lower().endswith(SUPPORT_EXTS)]
-        files2 = sorted(files2, key=lambda f: os.path.getmtime(os.path.join(st.session_state.data_dir_path, f)), reverse=True)
-
-        if files2:
-            pick = st.selectbox("Pick saved data file", files2, index=0, key="pick_file_bottom")
-            if st.button("Load selected", key="btn_load_selected_bottom"):
-                try:
-                    path = os.path.join(st.session_state.data_dir_path, pick)
-                    st.session_state.df = _load_df(path)
-                    st.session_state.data_meta = {"filename": pick, "path": path, "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                    st.success(f"Loaded: {pick}")
-                    _safe_rerun()
-                except Exception as e:
-                    st.error(f"Load failed: {e}")
-        else:
-            st.info("No data files (csv/xlsx/xls) in this folder.")
-
-        new_file = st.file_uploader("Upload new data (save into folder)", type=['csv', 'xlsx', 'xls'], key="uploader_new_bottom")
-        if new_file is not None:
-            try:
-                saved_path = _save_uploaded(new_file, st.session_state.data_dir_path)
-                st.session_state.df = _load_df(saved_path)
-                st.session_state.data_meta = {"filename": os.path.basename(saved_path), "path": saved_path, "loaded_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                st.success(f"Uploaded & loaded: {os.path.basename(saved_path)}")
-                _safe_rerun()
-            except Exception as e:
-                st.error(f"Upload/read failed: {e}")
-
-        if st.session_state.get("df") is not None:
-            meta = st.session_state.get("data_meta", {})
-            st.success(
-                f"**{meta.get('filename','(untitled)')}**\n\n"
-                f"Path: {meta.get('path','')}\n\n"
-                f"Loaded at: {meta.get('loaded_at','')}\n\n"
-                f"Rows: {len(st.session_state.df)}"
-            )
+    only_dup = st.checkbox("Only duplicate addresses (same addr ≥2)", value=False, key="only_dup_addr_v3")
+    dup_export_slot = st.empty()
+    st.session_state["_dup_export_slot"] = dup_export_slot
 
 with st.sidebar:
     render_mode = st.radio(
@@ -693,26 +804,12 @@ with st.sidebar:
 USE_STATIC_MAP = (render_mode == "Static (HTML)")
 
 # ======================
-# Area statistics
+# Area statistics（环形统计）
 # ======================
 base_mask = pd.Series(True, index=df.index)
-if level_choice != 'All':
-    base_mask &= (df['Level'] == level_choice)
 if state_choice != 'All':
     base_mask &= (df['State'] == state_choice)
 filtered_base = df.loc[base_mask].copy()
-
-if st.session_state.get("hvac_only", False):
-    text = (
-        filtered_base.get('Name',    pd.Series('', index=filtered_base.index)).astype('string').fillna('') + ' ' +
-        filtered_base.get('Address', pd.Series('', index=filtered_base.index)).astype('string').fillna('') + ' ' +
-        filtered_base.get('City',    pd.Series('', index=filtered_base.index)).astype('string').fillna('') + ' ' +
-        filtered_base.get('County',  pd.Series('', index=filtered_base.index)).astype('string').fillna('')
-    )
-    filtered_base = filtered_base[
-        text.str.contains(HVAC_PAT_STR,  case=False, na=False, regex=True) &
-       ~text.str.contains(BLACK_PAT_STR, case=False, na=False, regex=True)
-    ]
 
 if geo_level.startswith("County"):
     base_master = counties_master if state_choice=='All' else counties_master[counties_master['State']==state_choice]
@@ -720,13 +817,13 @@ if geo_level.startswith("County"):
 else:
     base_master = cities_master if state_choice=='All' else cities_master[cities_master['State']==state_choice]
     name_col = 'City'; layer_name = "City Rings"
+
 if 'unit_choice' in locals() and unit_choice != 'All':
     base_master = base_master[base_master[name_col] == unit_choice]
 base_master = base_master.copy()
 
-points_all = filtered_base.dropna(subset=['Latitude','Longitude']).copy()
-_selected_good_levels = [int(x) for x in (good_levels or [])]
-points_good = points_all[points_all['Level'].isin(_selected_good_levels)].copy() if _selected_good_levels else points_all.iloc[0:0].copy()
+points_all  = filtered_base.dropna(subset=['Latitude','Longitude']).copy()
+points_good = points_all.copy()
 
 R_EARTH_MI = 3958.7613
 def counts_balltree(centroids_df, pts_df, radius_mi):
@@ -748,9 +845,7 @@ def counts_balltree(centroids_df, pts_df, radius_mi):
         for i in range(0, len(centroids_df), batch):
             clat = np.radians(centroids_df['cLat'].values[i:i+batch])[:, None]
             clng = np.radians(centroids_df['cLng'].values[i:i+batch])[:, None]
-            dphi = latp - clat
-            dlmb = lonp - clng
-            a = np.sin(dphi/2)**2 + np.cos(clat)*np.cos(latp)*np.sin(dlmb/2)**2
+            a = np.sin((latp-clat)/2)**2 + np.cos(clat)*np.cos(latp)*np.sin((lonp-clng)/2)**2
             dist = 2*R_EARTH_MI*np.arcsin(np.sqrt(a))
             out[i:i+batch] = (dist <= radius_mi).sum(axis=1)
         return out
@@ -784,7 +879,7 @@ centroids_to_plot = (centroids_to_plot
                      .copy())
 
 # ======================
-# Export stats
+# Export stats (上方 metrics)
 # ======================
 unit_key = 'County' if geo_level.startswith("County") else 'City'
 label_total = "Total counties" if unit_key == 'County' else "Total cities"
@@ -850,286 +945,8 @@ if clicked:
     except Exception as e:
         st.warning(f"Could not save to local folder: {e}")
 
-# 🌐 Online enrichment (keep position)
-@st.cache_data(show_spinner=False, ttl=3600)
-def fetch_osm_overpass(lat, lng, radius_m=30000, hvac_only=False):
-    if hvac_only:
-        q = f"""
-[out:json][timeout:25];
-(
-  node(around:{radius_m},{lat},{lng})["craft"="hvac"];
-  way(around:{radius_m},{lat},{lng})["craft"="hvac"];
-  node(around:{radius_m},{lat},{lng})["name"~"hvac|air.?conditioning|heating|cooling|refrigeration|furnace|boiler", i];
-  way(around:{radius_m},{lat},{lng})["name"~"hvac|air.?conditioning|heating|cooling|refrigeration|furnace|boiler", i];
-);
-out center tags 60;
-"""
-    else:
-        q = f"""
-[out:json][timeout:25];
-(
-  node(around:{radius_m},{lat},{lng})["craft"~"hvac|electrician|plumber"];
-  way(around:{radius_m},{lat},{lng})["craft"~"hvac|electrician|plumber"];
-);
-out center tags 60;
-"""
-    try:
-        r = requests.post("https://overpass-api.de/api/interpreter", data=q.encode("utf-8"), timeout=30)
-        j = r.json()
-    except Exception:
-        return []
-    out = []
-    for e in j.get("elements", []):
-        tags = e.get("tags", {}) or {}
-        name = tags.get("name") or tags.get("brand")
-        if not name: continue
-        lat_e = e.get("lat") or (e.get("center") or {}).get("lat")
-        lon_e = e.get("lon") or (e.get("center") or {}).get("lon")
-        if lat_e is None or lon_e is None: continue
-        addr = ", ".join(filter(None, [
-            tags.get("addr:housenumber"), tags.get("addr:street"),
-            tags.get("addr:city"), tags.get("addr:state"), tags.get("addr:postcode")
-        ]))
-        text = f"{name} {addr}"
-        if BLACK_RE.search(text): continue
-        if st.session_state.get("hvac_only", False) and (not HVAC_RE.search(text) and tags.get("craft") != "hvac"):
-            continue
-        out.append({
-            "Name": name, "Address": addr if addr else pd.NA,
-            "Latitude": float(lat_e), "Longitude": float(lon_e),
-            "Level": np.nan, "ZIP": tags.get("addr:postcode"),
-            "State": pd.NA, "City": pd.NA, "County": pd.NA,
-            "Source": "web-osm", "SourceTag": tags.get("craft",""), "SourceId": str(e.get("id")),
-            "Rating": pd.NA, "UserRatingsTotal": pd.NA,
-        })
-    return out
-
-@st.cache_data(show_spinner=False, ttl=3600)
-def _gplaces_nearby_once(params, log=None):
-    base = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-    try:
-        r = requests.get(base, params=params, timeout=20)
-        j = r.json()
-    except Exception as e:
-        if log: log(f"Google request error: {e}")
-        return None
-    status = j.get("status", "")
-    if status != "OK":
-        msg = j.get("error_message", "")
-        if log: log(f"Google returned: {status}{(' - ' + msg) if msg else ''}")
-        return {"status": status, "results": j.get("results", []), "next_page_token": j.get("next_page_token")}
-    return {"status": "OK", "results": j.get("results", []), "next_page_token": j.get("next_page_token")}
-
-@st.cache_data(show_spinner=False, ttl=900)
-def _cache_ok_signature(params_signature, page):
-    return True
-
-def fetch_google_places(lat, lng, radius_m=30000, api_key=None, hvac_only=False, log=None):
-    key = api_key if api_key is not None else GOOGLE_PLACES_KEY
-    if not key:
-        if log: log("No Google API key detected, skip Google.")
-        return []
-    params = {"key": key, "location": f"{lat},{lng}", "radius": int(radius_m), "type": "hvac_contractor", "language": "en"}
-    out, token, page = [], None, 0
-    while True:
-        req = dict(params)
-        if token:
-            req["pagetoken"] = token
-        resp = _gplaces_nearby_once(req, log=log)
-        if not resp: break
-        if resp["status"] != "OK": break
-        _cache_ok_signature(tuple(sorted(req.items())), page)
-        for it in resp["results"]:
-            name = it.get("name", "") or ""
-            addr = it.get("vicinity") or it.get("formatted_address") or ""
-            types = it.get("types", []) or []
-            text  = f"{name} {addr}"
-            is_hvac_type = ("hvac_contractor" in types)
-            is_hvac_text = bool(HVAC_RE.search(text))
-            if hvac_only and (not (is_hvac_type or is_hvac_text)): continue
-            if BLACK_RE.search(text): continue
-            out.append({
-                "Name": name, "Address": addr,
-                "Latitude": it["geometry"]["location"]["lat"], "Longitude": it["geometry"]["location"]["lng"],
-                "Level": np.nan, "ZIP": pd.NA, "State": pd.NA, "City": pd.NA, "County": pd.NA,
-                "Source": "web-google", "SourceTag": "hvac_contractor" if is_hvac_type else "",
-                "SourceId": it.get("place_id"), "Rating": it.get("rating"), "UserRatingsTotal": it.get("user_ratings_total"),
-            })
-        token = resp.get("next_page_token")
-        page += 1
-        if not token or page >= 3: break
-        time.sleep(2.2)
-    if hvac_only and not out:
-        if log: log("type=hvac_contractor had no hits; try keyword fallback…")
-        kw = 'hvac OR "air conditioning" OR heating OR "heat pump" OR furnace OR boiler OR chiller'
-        req_kw = {"key": key, "location": f"{lat},{lng}", "radius": int(radius_m), "keyword": kw, "language": "en"}
-        resp = _gplaces_nearby_once(req_kw, log=log)
-        if resp and resp.get("results"):
-            for it in resp["results"]:
-                name = it.get("name", "") or ""
-                addr = it.get("vicinity") or it.get("formatted_address") or ""
-                text = f"{name} {addr}"
-                if BLACK_RE.search(text): continue
-                if not HVAC_RE.search(text): continue
-                out.append({
-                    "Name": name, "Address": addr,
-                    "Latitude": it["geometry"]["location"]["lat"], "Longitude": it["geometry"]["location"]["lng"],
-                    "Level": np.nan, "ZIP": pd.NA, "State": pd.NA, "City": pd.NA, "County": pd.NA,
-                    "Source": "web-google", "SourceTag": "keyword",
-                    "SourceId": it.get("place_id"), "Rating": it.get("rating"), "UserRatingsTotal": it.get("user_ratings_total"),
-                })
-    if log: log(f"Google effective results: {len(out)}")
-    return out
-
-def fetch_online_candidates_for_county(row, radius_m=30000, api_key=None, hvac_only=False, source_mode="Auto (Google first)", log=None):
-    lat = float(row["cLat"]); lng = float(row["cLng"])
-    items = []
-    if source_mode == "Google only (faster)":
-        items = fetch_google_places(lat, lng, radius_m=radius_m, api_key=api_key, hvac_only=hvac_only, log=log)
-    elif source_mode == "OSM only (fallback)":
-        items = fetch_osm_overpass(lat, lng, radius_m=radius_m, hvac_only=hvac_only)
-    else:
-        if api_key:
-            items = fetch_google_places(lat, lng, radius_m=radius_m, api_key=api_key, hvac_only=hvac_only, log=log)
-        if not items:
-            items = fetch_osm_overpass(lat, lng, radius_m=radius_m, hvac_only=hvac_only)
-    for it in items:
-        it["State"]  = row["State"]
-        it["County"] = row.get("County", pd.NA)
-        it["City"]   = row.get("City",   pd.NA)
-    return items
-
-with st.expander("🌐 Online enrichment", expanded=False):
-    st.caption("(Fetch using the currently selected State/County/City)")
-    col_a, col_b, col_c = st.columns([1.2, 1, 1.2])
-    with col_a:
-        max_cnties = st.number_input("Max areas to fetch", 1, 200, 10, 1)
-    with col_b:
-        search_rad = st.slider("Radius (km)", 5, 80, 30, 5)
-    with col_c:
-        merge_back = st.checkbox("Merge into dataset (and map)", value=True)
-
-    do_fetch = st.button("🔵 One-click add web technicians (blue pins)", use_container_width=True)
-    online_df = pd.DataFrame()
-
-    if do_fetch:
-        log_box = st.empty()
-
-        def log(msg: str):
-            ts = datetime.now().strftime("%H:%M:%S")
-            log_box.markdown(f"📝 **[{ts}]** {msg}")
-
-        take_n = int(max_cnties)
-        radius_m_fetch = int(search_rad * 1000)
-
-        # 注意这里用 County/All（英文），不要再用 “郡/全部”
-        base = counties_master if geo_level.startswith("County") else cities_master
-
-        if unit_choice != 'All' and state_choice != 'All':
-            rows = (
-                base[(base["State"] == state_choice) & (base[name_col] == unit_choice)]
-                .head(1)
-                .to_dict("records")
-            )
-        elif state_choice != 'All':
-            rows = (
-                base[base["State"] == state_choice]
-                .sort_values(["State", name_col])
-                .head(take_n)
-                .to_dict("records")
-            )
-        else:
-            rows = (
-                base.sort_values(["State", name_col])
-                .head(take_n)
-                .to_dict("records")
-            )
-
-        if not rows:
-            st.warning("No target area selected. Choose State/County/City on the left and try again.")
-        else:
-            log(
-                f"Start fetching {len(rows)} area(s) (R={search_rad}km, HVAC only: {st.session_state.get('hvac_only', False)}, source: {source_mode})…"
-            )
-            all_items = []
-            for i, r0 in enumerate(rows, 1):
-                unit_name = r0.get("County") if geo_level.startswith("County") else r0.get("City")
-                log(f"{i}/{len(rows)}: {r0['State']} / {unit_name} — requesting…")
-                try:
-                    items = fetch_online_candidates_for_county(
-                        r0,
-                        radius_m=radius_m_fetch,
-                        api_key=GOOGLE_PLACES_KEY,
-                        hvac_only=st.session_state.get('hvac_only', False),
-                        source_mode=source_mode,
-                        log=log,
-                    )
-                    all_items.extend(items)
-                    log(f"✓ Added {len(items)} item(s), total {len(all_items)}.")
-                except Exception as e:
-                    log(f"× Fetch failed: {e}")
-                time.sleep(0.2)
-
-            if all_items:
-                online_df = (
-                    pd.DataFrame(all_items)
-                    .drop_duplicates(subset=["Source", "SourceId"], keep="first")
-                    .reset_index(drop=True)
-                )
-                online_df["Level"] = 7
-            else:
-                online_df = pd.DataFrame(
-                    columns=[
-                        "Name",
-                        "Address",
-                        "Latitude",
-                        "Longitude",
-                        "Level",
-                        "State",
-                        "City",
-                        "County",
-                        "ZIP",
-                        "Source",
-                        "SourceId",
-                        "Rating",
-                        "UserRatingsTotal",
-                    ]
-                )
-
-            if not online_df.empty:
-                st.session_state["_web_new_layer"] = online_df.to_dict("records")
-
-            buf_new = io.BytesIO()
-            with pd.ExcelWriter(buf_new, engine="openpyxl") as w:
-                online_df.to_excel(w, index=False, sheet_name="WebNew")
-            buf_new.seek(0)
-
-            st.download_button(
-                "Download fetched list (Excel)",
-                data=buf_new,
-                file_name=f"web_new_workers_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                key="dl_web_new",
-            )
-
-            if online_df.empty:
-                st.warning("Done, but 0 valid results (API returned nothing, filtered out, or Google Key not set).")
-            else:
-                st.success(f"Done. {len(online_df)} valid result(s).")
-
-            if merge_back and not online_df.empty:
-                cols = ["Name", "Address", "Latitude", "Longitude", "Level", "State", "City", "County", "ZIP"]
-                for c in cols:
-                    if c not in online_df.columns:
-                        online_df[c] = pd.NA
-                st.session_state.df = pd.concat([st.session_state.df, online_df[cols]], ignore_index=True)
-                st.toast("Merged web-new points (Level=7) into dataset.")
-                _safe_rerun()
-
-
 # ======================
-# Search row (under the map)
+# Search row
 # ======================
 c1, c2, c3 = st.columns([0.28, 0.36, 0.36])
 with c1:
@@ -1145,7 +962,7 @@ if "_last_cust_geocode_msg" in st.session_state:
     st.toast(st.session_state.pop("_last_cust_geocode_msg"))
 
 # ======================
-# Filter + matched set
+# Filter + matched set（含抽稀）
 # ======================
 def _s(val):
     try:
@@ -1172,28 +989,14 @@ def _full_address_from_row(row):
     return ", ".join(parts) if parts else ""
 
 def _norm_addr_for_dup(addr: str) -> str:
-    """
-    Normalize for duplicate-address detection:
-    - lower
-    - full-width comma -> half-width
-    - commas -> space
-    - 'FL 1' -> 'fl1'
-    - non-alnum -> space
-    - compress spaces
-    """
-    if addr is None:
-        return ""
+    if addr is None: return ""
     s = str(addr).strip().lower()
-    s = s.replace('，', ',')            # full-width comma -> half-width
-    s = s.replace(',', ' ')             # commas -> spaces
-    s = re.sub(r'\bfl\s*([0-9]+)\b', r'fl\1', s)  # 'fl 1' -> 'fl1'
-    s = re.sub(r'[^a-z0-9]', ' ', s)    # keep only [a-z0-9]
-    s = re.sub(r'\s+', ' ', s).strip()  # compress spaces
+    s = s.replace('，', ',').replace(',', ' ')
+    s = re.sub(r'[^a-z0-9]', ' ', s)
+    s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 mask = pd.Series(True, index=df.index)
-if level_choice != 'All':
-    mask &= (df['Level'] == level_choice)
 if state_choice != 'All':
     mask &= (df['State'] == state_choice)
 if geo_level.startswith("County") and unit_choice != 'All':
@@ -1201,154 +1004,118 @@ if geo_level.startswith("County") and unit_choice != 'All':
 if (not geo_level.startswith("County")) and unit_choice != 'All':
     mask &= (df['City'] == unit_choice)
 
-
 filtered = df.loc[mask].copy()
-
-if st.session_state.get("hvac_only", False):
-    text = (
-        filtered.get('Name',    pd.Series('', index=filtered.index)).astype('string').fillna('') + ' ' +
-        filtered.get('Address', pd.Series('', index=filtered.index)).astype('string').fillna('') + ' ' +
-        filtered.get('City',    pd.Series('', index=filtered.index)).astype('string').fillna('') + ' ' +
-        filtered.get('County',  pd.Series('', index=filtered.index)).astype('string').fillna('')
-    )
-    filtered = filtered[
-        text.str.contains(HVAC_PAT_STR,  case=False, na=False, regex=True) &
-       ~text.str.contains(BLACK_PAT_STR, case=False, na=False, regex=True)
-    ]
-
 points = filtered.dropna(subset=['Latitude','Longitude']).copy()
-if st.session_state.get("show_only_new", False):
-    points = points[points['Level'].eq(7)]
 
-# Debug panel at the bottom of sidebar
-with st.sidebar:
-    st.markdown("---")
-    with st.expander("🛠 Display/Debug (for troubleshooting)", expanded=False):
-        st.write(f"Visible points: **{len(points)}** / Original with coords: **{df.dropna(subset=['Latitude','Longitude']).shape[0]}**")
-        st.caption(f"Missing lat: {int(df['Latitude'].isna().sum())} · Missing lon: {int(df['Longitude'].isna().sum())}")
-        force_show_all = st.checkbox("Ignore filters (show all points with coordinates)", value=False, key="force_show_all_cb")
-
-if st.session_state.get("force_show_all_cb"):
-    points = df.dropna(subset=['Latitude','Longitude']).copy()
-
-if only_show_good_points:
-    _sel_lvls = [int(x) for x in (good_levels or [])]
-    points = points[points['Level'].isin(_sel_lvls)] if _sel_lvls else points.iloc[0:0]
-
-# Apply “only duplicate addresses” filter (after good-level filter)
-if st.session_state.get("only_dup_addr_v3", False):
-    addr_series = points.apply(_full_address_from_row, axis=1).map(_norm_addr_for_dup)
-    vc = addr_series.value_counts()
-    dup_mask = addr_series.map(vc).fillna(0) >= 2
-    points = points[dup_mask].copy()
-
-# Build duplicate export (always recompute counts for export)
-_addr_series_all = points.apply(_full_address_from_row, axis=1).map(_norm_addr_for_dup)
-_vc_all = _addr_series_all.value_counts()
-_dup_mask_all = _addr_series_all.map(_vc_all).fillna(0).astype(int) >= 2
-
-dup_points_export = points[_dup_mask_all].copy()
-if not dup_points_export.empty:
-    dup_points_export.insert(
-        0, "Duplicate Count", _addr_series_all[_dup_mask_all].map(_vc_all).astype(int).values
-    )
-    _cols_pref = ["Duplicate Count","Name","Address","City","State","ZIP","Level","Latitude","Longitude"]
-    _cols_exist = [c for c in _cols_pref if c in dup_points_export.columns]
-    _dup_buf = _build_xlsx(dup_points_export[_cols_exist], sheet_name="DuplicateAddresses")
+_selected_display_lvls = [int(x) for x in (level_filter_display or [])]
+if _selected_display_lvls:
+    points = points[points['Level'].isin(_selected_display_lvls)].copy()
 else:
-    _dup_buf = None
+    points = points.iloc[0:0].copy()
 
-# Render the "export duplicates" button under the checkbox
-if 'dup_export_slot' in locals():
-    dup_export_slot.empty()
-    if st.session_state.get("only_dup_addr_v3", False):
-        if _dup_buf is not None:
-            with dup_export_slot:
-                st.download_button(
-                    "Export duplicate addresses (Excel)",
-                    data=_dup_buf,
-                    file_name=f"duplicate_addresses_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key="dl_dup_excel",
-                )
-        else:
-            with dup_export_slot:
-                st.caption("(No duplicate addresses to export under the current filter)")
+if show_all_techs or (perf_mode == "Fast dots (all techs)"):
+    points = df.dropna(subset=['Latitude','Longitude']).copy()
+    if _selected_display_lvls:
+        points = points[points['Level'].isin(_selected_display_lvls)].copy()
+
+dup_points_export = None
+only_dup = st.session_state.get("only_dup_addr_v3", False)  # 兜底，保证有值
+# —— 当勾选 Only duplicate 时，强制使用聚合模式（仅对本次渲染生效）—— #
+if only_dup:
+    perf_mode = "Clustered markers (default)"
+    # 避免与 “Fast dots (all techs)” 冲突：重复模式不需要全量小圆点
+    show_all_techs = False
+if only_dup:
+    addr_series_all = points.apply(_full_address_from_row, axis=1).map(_norm_addr_for_dup)
+    vc = addr_series_all.value_counts()
+    dup_mask = addr_series_all.map(vc).fillna(0).astype(int) >= 2
+    dup_points_export = points[dup_mask].copy()
+    points = dup_points_export.copy()
+    
 
 def _contains_safe(s, q):
     return s.astype(str).str.contains(re.escape(q), case=False, na=False)
 
 matched = points.copy()
 has_query = False
-if q_name:
+if st.session_state.get("q_name"):
     has_query = True
-    matched = matched[_contains_safe(matched['Name'], q_name)]
-if q_addr:
+    matched = matched[_contains_safe(matched['Name'], st.session_state["q_name"])]
+if st.session_state.get("q_addr"):
     has_query = True
+    addr_q = st.session_state["q_addr"]
     addr_mask = (
-        _contains_safe(points['Address'], q_addr) |
-        _contains_safe(points.get('City',   pd.Series("", index=points.index)),   q_addr) |
-        _contains_safe(points.get('County', pd.Series("", index=points.index)),   q_addr) |
-        _contains_safe(points.get('ZIP',    pd.Series("", index=points.index)),   q_addr) |
-        _contains_safe(points.get('State',  pd.Series("", index=points.index)),   q_addr)
+        _contains_safe(points['Address'], addr_q) |
+        _contains_safe(points.get('City',   pd.Series("", index=points.index)),   addr_q) |
+        _contains_safe(points.get('County', pd.Series("", index=points.index)),   addr_q) |
+        _contains_safe(points.get('ZIP',    pd.Series("", index=points.index)),   addr_q) |
+        _contains_safe(points.get('State',  pd.Series("", index=points.index)),   addr_q)
     )
     matched = matched[addr_mask]
 search_active = bool(has_query) and (len(matched) > 0)
+
+def _is_inhouse(name: str) -> bool:
+    return "INHOUSE-TECH" in str(name).upper()
+
+inhouse_mask = points['Name'].astype(str).map(_is_inhouse)
+
+matched_idx = None
+if search_active:
+    matched_idx = matched.index
+
+cust_pin = st.session_state.get("cust_quick_pin")
+
+# 这里使用 number_input 的值（总是存在）
+max_tech_markers = int(st.session_state.get("max_tech_markers_val", DEFAULT_MAX_TECH_MARKERS))
+
+idx_kept = thin_points(
+    points, target_max=max_tech_markers,
+    matched_idx=matched_idx,
+    inhouse_mask=inhouse_mask,
+    cust_pin=cust_pin,
+    near_radius_mi=near_pin_boost,
+)
+points = points.loc[idx_kept].copy()
+if search_active:
+    matched = matched.loc[matched.index.intersection(points.index)]
+
+# 客户点：先按州过滤，再按上限抽样
+cust_df = st.session_state.get("cust_df", None)
+cust_for_map = None
+if isinstance(cust_df, pd.DataFrame) and len(cust_df) > 0:
+    cand = cust_df.dropna(subset=["CLatitude","CLongitude"]).copy()
+    if state_choice != 'All' and "CState" in cand.columns:
+        cand = cand[cand["CState"].astype("string") == str(state_choice)]
+
+    if len(cand) > max_cust_markers:
+        if cust_pin:
+            lat = cand["CLatitude"].to_numpy(float)
+            lng = cand["CLongitude"].to_numpy(float)
+            d = _haversine_batch(cust_pin["lat"], cust_pin["lng"], lat, lng)
+            near = cand.iloc[np.where(d <= near_pin_boost)[0]]
+            if len(near) >= max_cust_markers:
+                cust_for_map = near.sample(max_cust_markers, random_state=1)
+            else:
+                remain_quota = max_cust_markers - len(near)
+                others = cand.drop(index=near.index)
+                cust_for_map = pd.concat([near, others.sample(remain_quota, random_state=1)])
+        else:
+            cust_for_map = cand.sample(max_cust_markers, random_state=1)
+    else:
+        cust_for_map = cand
+else:
+    cust_for_map = None
 
 # ======================
 # Map drawing
 # ======================
 US_STATES_GEO_PATH = os.path.join(data_dir, "us_states.geojson")
-LEVEL_COLORS = {
-    1:'#2ecc71',  # green
-    2:'#FFD700',  # gold
-    3:'#FF4D4F',  # red
-    4:'#FFC0CB',  # pink
-    5:'#8A2BE2',  # purple
-    6:'#000000',  # black
-    7:'#1E90FF',  # blue (Level=7 in dataset)
-}
+LEVEL_COLORS = {1:'#2ecc71',2:'#FFD700',3:'#FF4D4F',4:'#FFC0CB',5:'#8A2BE2',6:'#000000'}
+prefer_canvas = True
 
-prefer_canvas = st.session_state.get("perf_prefer_canvas", True)
-
-# Do not rely on provider name; mount multiple tile sources to avoid CDN blocking
-m = folium.Map(
-    location=[37.8, -96.0],
-    zoom_start=4,
-    keyboard=False,
-    prefer_canvas=prefer_canvas,
-    tiles=None
-)
-
-# Backup 1: OSM HOT (FR)
-folium.TileLayer(
-    tiles="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
-    attr="&copy; OpenStreetMap France, HOT",
-    name="OSM HOT (backup)", control=True, max_zoom=19, overlay=False
-).add_to(m)
-
-# Backup 2: OSM DE (DE)
-folium.TileLayer(
-    tiles="https://tile.openstreetmap.de/{z}/{x}/{y}.png",
-    attr="&copy; OpenStreetMap DE",
-    name="OSM DE (backup)", control=True, max_zoom=19, overlay=False
-).add_to(m)
-
-# Backup 3: Carto (use when network is good)
-folium.TileLayer(
-    tiles="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
-    attr="&copy; CARTO",
-    name="Carto Positron (backup)", control=True, max_zoom=20, overlay=False
-).add_to(m)
-
-# Default OSM official
-folium.TileLayer(
-    tiles="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    attr="&copy; OpenStreetMap contributors",
-    name="OSM (official)", control=True, max_zoom=19, overlay=False
-).add_to(m)
-
+m = folium.Map(location=[37.8, -96.0], zoom_start=4, keyboard=False, prefer_canvas=prefer_canvas, tiles=None)
+folium.TileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", attr="&copy; CARTO", name="Carto Positron", control=True, max_zoom=20, overlay=False).add_to(m)
+folium.TileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", attr="&copy; OpenStreetMap contributors", name="OSM", control=True, max_zoom=19, overlay=False).add_to(m)
 m.get_root().header.add_child(folium.Element("""
 <style>
 .leaflet-container:focus, .leaflet-container:focus-visible { outline: none !important; }
@@ -1356,33 +1123,32 @@ m.get_root().header.add_child(folium.Element("""
 </style>
 """))
 
-states_geo = load_us_states_geojson_cached(US_STATES_GEO_PATH)
+# 州边界（点量大时跳过）
+states_geo = None
+if len(points) <= 6000:
+    states_geo = load_us_states_geojson_cached(US_STATES_GEO_PATH)
+
 selected_bounds = None
 if states_geo:
     feats = states_geo['features']
-    states_fc = {'type': 'FeatureCollection', 'features': feats}
     def style_fn(feat):
         code = feat.get('id') or feat.get('properties', {}).get('state_code')
         is_selected = (state_choice != 'All' and code == state_choice)
-        return {'fillColor':'#ffffff','fillOpacity':0.0,'color':'#2563eb','weight':3.0 if is_selected else 1.8,'dashArray':None}
-    gj = folium.GeoJson(
-        data=states_fc, name="US States",
-        style_function=style_fn, highlight_function=None,
-        tooltip=folium.GeoJsonTooltip(fields=['name'], aliases=['State:'])
-    ).add_to(m)
-
+        return {'fillColor':'#ffffff','fillOpacity':0.0,'color':'#2563eb','weight':3.0 if is_selected else 1.8}
+    gj = folium.GeoJson(states_geo, name="US States", style_function=style_fn,
+                        tooltip=folium.GeoJsonTooltip(fields=['name'], aliases=['State:'])).add_to(m)
     if state_choice != 'All':
         target = next((f for f in feats if (f.get('id') or f.get('properties', {}).get('state_code')) == state_choice), None)
         if target:
             def iter_coords(geom):
                 if geom['type'] == 'Polygon':
                     for ring in geom['coordinates']:
-                        for lng, lat in ring: 
+                        for lng, lat in ring:
                             yield lat, lng
                 elif geom['type'] == 'MultiPolygon':
                     for poly in geom['coordinates']:
                         for ring in poly:
-                            for lng, lat in ring: 
+                            for lng, lat in ring:
                                 yield lat, lng
             latlngs = list(iter_coords(target['geometry']))
             if latlngs:
@@ -1391,27 +1157,21 @@ if states_geo:
     else:
         selected_bounds = gj.get_bounds()
 
-# County/City circles
+# County/City rings
 radius_m = radius_miles * 1609.34
-unit_fg = folium.FeatureGroup(name=layer_name, show=True).add_to(m)
-
+unit_fg = folium.FeatureGroup(name=("County Rings" if geo_level.startswith("County") else "City Rings"), show=True).add_to(m)
 for _, r in centroids_to_plot.iterrows():
     ring_color = '#1e88e5' if bool(r['meets']) else '#9e9e9e'
-    tip = (f"{'County' if geo_level.startswith('County') else 'City'}: {r.get(name_col)} "
-       f"({r.get('State')}) | Good: {int(r['good_in_radius'])} / All: {int(r['all_in_radius'])}")
-
-    folium.Circle(location=[r['cLat'], r['cLng']], radius=radius_m,
+    tip = (f"{'County' if geo_level.startswith('County') else 'City'}: {r.get('County' if geo_level.startswith('County') else 'City')} "
+           f"({r.get('State')}) | Good: {int(r['good_in_radius'])} / All: {int(r['all_in_radius'])}")
+    folium.Circle([r['cLat'], r['cLng']], radius=radius_m,
                   color=ring_color, weight=1.6, fill=True, fill_opacity=0.05,
                   tooltip=tip).add_to(unit_fg)
 
-# Popups
+# 弹窗
 POPUP_MAX_W = 520
-def make_worker_popup(
-    name, level, address=None, zip_code=None, distance_text="",
-    contact=None, email=None, phone=None, note=None, is_cold=False, is_hot=False, **kwargs
-):
-    if not address:
-        address = kwargs.get("state", "")
+def make_worker_popup(name, level, address=None, distance_text="", contact=None, email=None, phone=None, note=None,
+                      is_cold=False, is_hot=False, **kwargs):
     def _has(v):
         try:
             if v is None or pd.isna(v): return False
@@ -1421,42 +1181,21 @@ def make_worker_popup(
     icons_html = ""
     if bool(is_cold): icons_html += "<span style='font-size:18px;line-height:1'>🔧</span>"
     if bool(is_hot):  icons_html += "<span style='font-size:18px;line-height:1'>🔥</span>"
-
-    contact_html = f"<div><b>Contact:</b> {_s(contact)}</div>" if _has(contact) else ""
-    phone_html   = f"<div><b>Phone:</b> {_s(phone)}</div>"     if _has(phone)   else ""
-    email_html   = f'<div><b>Email:</b> <a href="mailto:{_s(email)}" target="_blank">{_s(email)}</a></div>' if _has(email) else ""
-    note_html    = f"<div><b>Note:</b> {_s(note)}</div>" if _has(note) else ""
-
+    contact_html = f"<div><b>Contact:</b> {str(contact)}</div>" if _has(contact) else ""
+    phone_html   = f"<div><b>Phone:</b> {str(phone)}</div>"     if _has(phone)   else ""
+    email_html   = f'<div><b>Email:</b> <a href="mailto:{str(email)}" target="_blank">{str(email)}</a></div>' if _has(email) else ""
+    note_html    = f"<div><b>Note:</b> {str(note)}</div>" if _has(note) else ""
     html = f"""
     <div style="min-width:420px; font-size:13px; line-height:1.4; white-space:normal;">
-      <div><b>Name:</b> {_s(name)} {icons_html}</div>
-      <div><b>Level:</b> {_s(level)}</div>
-      <div><b>Address:</b> {_s(address)}</div>
+      <div><b>Name:</b> {str(name)} {icons_html}</div>
+      <div><b>Level:</b> {str(level)}</div>
+      <div><b>Address:</b> {str(address or '')}</div>
       {contact_html}{phone_html}{email_html}{note_html}
-      <div><b>Distance:</b> {_s(distance_text)}</div>
+      <div><b>Distance:</b> {str(distance_text)}</div>
     </div>
     """
     return folium.Popup(html, max_width=POPUP_MAX_W)
 
-def make_lite_popup_row(row):
-    addr = _full_address_from_row(row)
-    dist = popup_distance_text(row['LatAdj'], row['LngAdj'], prefer_drive=False)
-
-    icons_html = ""
-    if bool(row.get('IsColdFlag', False)): icons_html += " 🔧"
-    if bool(row.get('IsHotFlag',  False)): icons_html += " 🔥"
-
-    html = f"""
-    <div style="min-width:260px; font-size:12.5px; line-height:1.35; white-space:normal;">
-      <div><b>Name:</b> {_s(row.get('Name',''))}{icons_html}</div>
-      <div><b>Level:</b> {_s(row.get('Level',''))}</div>
-      <div><b>Address:</b> {_s(addr)}</div>
-      <div><b>Distance:</b> {_s(dist)}</div>
-    </div>
-    """
-    return folium.Popup(html, max_width=360)
-
-# Distance/time helpers
 def haversine_miles(lat1, lng1, lat2, lng2):
     R = 3958.7613
     p1 = np.radians([lat1, lng1]); p2 = np.radians([lat2, lng2])
@@ -1478,8 +1217,7 @@ def osrm_drive_info(lat1, lng1, lat2, lng2, timeout=8):
 
 cust_pin = st.session_state.get("cust_quick_pin")
 def popup_distance_text(lat, lng, prefer_drive=False):
-    if not cust_pin:
-        return "-"
+    if not cust_pin: return "-"
     dline = haversine_miles(cust_pin["lat"], cust_pin["lng"], float(lat), float(lng))
     if prefer_drive:
         drive = osrm_drive_info(cust_pin["lat"], cust_pin["lng"], float(lat), float(lng))
@@ -1487,26 +1225,22 @@ def popup_distance_text(lat, lng, prefer_drive=False):
             return f"{drive[0]:.1f} mi · {int(round(drive[1]))} min"
     return f"{dline:.1f} mi (straight-line)"
 
-# INHOUSE-TECH check
 def _is_inhouse(name: str) -> bool:
     return "INHOUSE-TECH" in str(name).upper()
 
-# Icon factory
 def _make_marker_icon(color_hex: str, larger: bool = False):
-    # larger=True -> INHOUSE-TECH keeps large pin (54h), else small (28h)
     return ring_pin_icon(color_hex, size_h_px=(54 if larger else 28))
 
-# Spread points with identical coordinates but different names
+# 拓点避免重叠（技师）
+points = points.copy()
 points['LatAdj'] = points['Latitude'].values
 points['LngAdj'] = points['Longitude'].values
-
 if not points.empty:
     grp = points.groupby(['Latitude','Longitude'])
     for (lat0, lng0), idxs in grp.groups.items():
         sub = points.loc[idxs]
         if sub['Name'].astype(str).nunique() > 1 and len(sub) > 1:
-            k = len(sub)
-            delta = 0.00035
+            k = len(sub); delta = 0.00035
             lat_rad = np.radians(lat0 if pd.notna(lat0) else 0.0)
             for j, idx in enumerate(sub.index):
                 ang  = 2*np.pi * (j / k)
@@ -1515,30 +1249,31 @@ if not points.empty:
                 points.at[idx, 'LatAdj'] = float(lat0) + dlat
                 points.at[idx, 'LngAdj'] = float(lng0) + dlng
 
-# Cluster / fast-dot modes
-use_cluster = st.session_state.get("perf_use_cluster", True)
-fast_mode = (not use_cluster) and st.session_state.get("perf_fast_dots", True)
+use_cluster = (perf_mode == "Clustered markers (default)")
+force_all = show_all_techs or (perf_mode == "Fast dots (all techs)")
+always_big_inhouse = force_all
 
-# Point layer (cluster vs non-cluster)
 workers_fg = folium.FeatureGroup(name="Technician points", show=True).add_to(m)
-use_cluster = st.session_state.get("perf_use_cluster", True)
 
+disable_popups = should_disable_popups(len(points))
 
-# === Cluster mode (robust): 每个等级一个独立集群，直接挂到 m，而不是挂到 workers_fg ===
+def _lite_popup_row(row):
+    addr = (row.get('Address') or f"{row.get('City','')}, {row.get('State','')}, {row.get('ZIP','')}")
+    dist = popup_distance_text(row['LatAdj'], row['LngAdj'], prefer_drive=False)
+    icons = f"{'🔧' if bool(row.get('IsColdFlag',False)) else ''}{'🔥' if bool(row.get('IsHotFlag',False)) else ''}"
+    html = f"""
+    <div style="min-width:240px; font-size:12.5px; line-height:1.35; white-space:normal;">
+      <div><b>Name:</b> {str(row.get('Name',''))} {icons}</div>
+      <div><b>Level:</b> {str(row.get('Level',''))}</div>
+      <div><b>Address:</b> {str(addr)}</div>
+      <div><b>Distance:</b> {str(dist)}</div>
+    </div>
+    """
+    return folium.Popup(html, max_width=320)
+
 if use_cluster:
     clusters = {}
-
-    # 仅为当前 points 中“实际存在”的等级建层
-    present_levels = (
-        points['Level']
-        .dropna()
-        .astype(int)
-        .unique()
-        .tolist()
-    )
-    present_levels = sorted(present_levels)
-
-    # 为存在的每个等级创建独立集群（直接 add_to(m)）
+    present_levels = sorted(points['Level'].dropna().astype(int).unique().tolist()) if not points.empty else []
     for lvl in present_levels:
         col = LEVEL_COLORS.get(int(lvl), '#3388ff')
         clusters[int(lvl)] = MarkerCluster(
@@ -1547,214 +1282,165 @@ if use_cluster:
             function(cluster) {{
               var count = cluster.getChildCount();
               return new L.DivIcon({{
-                html: '<div style="background:{col};opacity:0.85;border-radius:20px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;color:white;font-weight:600;border:2px solid white;">'+count+'</div>',
-                className: 'marker-cluster', iconSize: new L.Point(36, 36)
+                html: '<div style="background:{col};opacity:0.85;border-radius:20px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:white;font-weight:600;border:2px solid white;font-size:12px;">'+count+'</div>',
+                className: 'marker-cluster', iconSize: new L.Point(32, 32)
               }});
             }}
             """
-        ).add_to(m);  # ← 关键：直接挂在地图 m，而不是 workers_fg
+        ).add_to(m)
 
-    # 无等级/解析失败的点，放入一个独立分组，直接挂到 m
     others_fg = folium.FeatureGroup(name="Others (no level)", show=True).add_to(m)
 
-    # 投放点
     for _, row in points.iterrows():
-        # 安全解析 Level
-        lvl = None
-        if not pd.isna(row['Level']):
-            try:
-                lvl = int(row['Level'])
-            except Exception:
-                lvl = None
-
+        lvl = int(row['Level']) if not pd.isna(row['Level']) else None
         base_color = LEVEL_COLORS.get(lvl, '#3388ff')
-        larger = _is_inhouse(row.get('Name',''))
+        larger = always_big_inhouse and _is_inhouse(row.get('Name',''))
         icon = _make_marker_icon('#1E90FF' if larger else base_color, larger=larger)
-
-        distance_text = popup_distance_text(row['LatAdj'], row['LngAdj'], prefer_drive=False)
-        popup_obj = make_worker_popup(
-            name=row.get('Name',''),
-            level=row.get('Level',''),
-            address=_full_address_from_row(row),
-            distance_text=distance_text,
-            contact=row.get('Contact'),
-            email=row.get('Email'),
-            phone=row.get('Phone'),
-            note=row.get('Note'),
-            is_cold=row.get('IsColdFlag', False),
-            is_hot=row.get('IsHotFlag',  False),
-        )
-
-        target_layer = clusters.get(lvl, None)
-        if target_layer is None:
-            target_layer = others_fg
-
-        folium.Marker(
-            location=[row['LatAdj'], row['LngAdj']],
-            icon=icon,
-            popup=popup_obj,
-            tooltip=_s(row.get('Name',''))
-        ).add_to(target_layer)
-
-# === Non-cluster mode (hardened with INHOUSE big icon) ===
+        if disable_popups:
+            popup_obj = None
+        else:
+            distance_text = popup_distance_text(row['LatAdj'], row['LngAdj'], prefer_drive=False)
+            popup_obj = make_worker_popup(
+                name=row.get('Name',''), level=row.get('Level',''),
+                address=(row.get('Address') or f"{row.get('City','')}, {row.get('State','')}, {row.get('ZIP','')}"),
+                distance_text=distance_text,
+                contact=row.get('Contact'), email=row.get('Email'), phone=row.get('Phone'), note=row.get('Note'),
+                is_cold=row.get('IsColdFlag', False), is_hot=row.get('IsHotFlag',  False),
+            )
+        target_layer = clusters.get(lvl, None) or others_fg
+        folium.Marker([row['LatAdj'], row['LngAdj']], icon=icon, popup=popup_obj,
+                      tooltip=str(row.get('Name',''))).add_to(target_layer)
 else:
-    # —— 关键：非聚合也按 Level 分图层（确保 lvl_groups_nc / others_fg_nc 在本分支里创建）——
-    present_levels_nc = (
-        sorted(points['Level'].dropna().astype(int).unique().tolist())
-        if not points.empty else []
-    )
-    lvl_groups_nc = {
-        int(lvl): folium.FeatureGroup(name=f"Level {int(lvl)}", show=True).add_to(m)
-        for lvl in present_levels_nc
-    }
+    is_fast_dots = (perf_mode == "Fast dots (all techs)")
+    dot_r = 7
+    present_levels_nc = sorted(points['Level'].dropna().astype(int).unique().tolist()) if not points.empty else []
+    lvl_groups_nc = {int(lvl): folium.FeatureGroup(name=f"Level {int(lvl)}", show=True).add_to(m) for lvl in present_levels_nc}
     others_fg_nc = folium.FeatureGroup(name="Others (no level)", show=True).add_to(m)
-
-    dot_r = int(st.session_state.get("perf_fast_radius", 7))
-    n_points = len(points)
-
-    HARD_CAP = int(st.session_state.get("perf_noncluster_cap", 12000))   # 全局硬上限（防爆）
-    INHOUSE_ICON_CAP = int(st.session_state.get("perf_inhouse_icon_cap", 2000))  # INHOUSE 使用大图标的上限
-    fast_mode = st.session_state.get("perf_fast_dots", True)
-
-    # 超上限：抽样，避免浏览器崩溃 -> 空白
-    if n_points > HARD_CAP:
-        st.warning(f"Too many points without clustering ({n_points:,}); sampled to {HARD_CAP:,} to keep the map responsive.")
-        points = points.sample(HARD_CAP, random_state=0).copy()
-        n_points = len(points)
-
-
-    EXTREME_STATIC = (USE_STATIC_MAP and n_points >= int(st.session_state.get("perf_fast_threshold", 2500)))
-
-    # 轻量 popup
-    def _lite_popup_for_row(row):
-        return make_lite_popup_row(row)
 
     def _add_circle(row, base_color, target_layer, radius=None):
         folium.CircleMarker(
-            location=[row['LatAdj'], row['LngAdj']],
+            [row['LatAdj'], row['LngAdj']],
             radius=(radius or dot_r),
-            stroke=False,           # ← 关闭描边
-            weight=0,            
+            stroke=False, weight=0,
             fill=True, fill_color=base_color, fill_opacity=0.8,
-            tooltip=_s(row.get('Name','')),
-            popup=_lite_popup_for_row(row)
+            tooltip=str(row.get('Name','')),
+            popup=None if disable_popups else _lite_popup_row(row)
         ).add_to(target_layer)
 
-    def _add_inhouse(row, target_layer):
-        # 点数不大 → 用大图钉；过多 → 退化成更醒目的蓝色大圆点
-        if n_points <= INHOUSE_ICON_CAP:
-            icon = _make_marker_icon('#1E90FF', larger=True)
-            folium.Marker(
-                location=[row['LatAdj'], row['LngAdj']],
-                icon=icon,
-                tooltip=_s(row.get('Name','')),
-                popup=_lite_popup_for_row(row)
-            ).add_to(target_layer)
+    def _add_inhouse_marker(row, target_layer):
+        icon = _make_marker_icon('#1E90FF', larger=True)
+        folium.Marker([row['LatAdj'], row['LngAdj']], icon=icon,
+                      tooltip=str(row.get('Name','')),
+                      popup=None if disable_popups else _lite_popup_row(row)).add_to(target_layer)
+
+    for _, row in points.iterrows():
+        lvl = int(row['Level']) if not pd.isna(row['Level']) else None
+        base_color = LEVEL_COLORS.get(lvl, '#3388ff')
+        target_layer = lvl_groups_nc.get(lvl, others_fg_nc)
+        if _is_inhouse(row.get('Name','')) and (always_big_inhouse or not is_fast_dots):
+            _add_inhouse_marker(row, target_layer)
         else:
-            _add_circle(row, '#1E90FF', target_layer, radius=dot_r + 3)
-
-
-
-
-    if EXTREME_STATIC:
-        for _, row in points.iterrows():
-            lvl = int(row['Level']) if not pd.isna(row['Level']) else None
-            base_color = LEVEL_COLORS.get(lvl, '#3388ff')
-            target_layer = lvl_groups_nc.get(lvl, others_fg_nc)
-
-            if _is_inhouse(row.get('Name','')):
-                _add_inhouse(row, target_layer)
+            if is_fast_dots:
+                _add_circle(row, base_color, target_layer, radius=dot_r)
             else:
-                _add_circle(row, base_color, target_layer)
+                icon = _make_marker_icon(base_color, larger=False)
+                folium.Marker([row['LatAdj'], row['LngAdj']], icon=icon,
+                              tooltip=str(row.get('Name','')),
+                              popup=None if disable_popups else _lite_popup_row(row)).add_to(target_layer)
 
-        st.caption(f"🧩 Extreme static optimization: {n_points:,} points (lightweight dots & popups)")
-
-    elif fast_mode:
-        for _, row in points.iterrows():
-            lvl = int(row['Level']) if not pd.isna(row['Level']) else None
-            base_color = LEVEL_COLORS.get(lvl, '#3388ff')
-            target_layer = lvl_groups_nc.get(lvl, others_fg_nc)
-
-            if _is_inhouse(row.get('Name','')):
-                _add_inhouse(row, target_layer)
-            else:
-                _add_circle(row, base_color, target_layer)
-
-    else:
-        for _, row in points.iterrows():
-            lvl = int(row['Level']) if not pd.isna(row['Level']) else None
-            base_color = LEVEL_COLORS.get(lvl, '#3388ff')
-            target_layer = lvl_groups_nc.get(lvl, others_fg_nc)
-
-            if _is_inhouse(row.get('Name','')):
-                _add_inhouse(row, target_layer)
-            else:
-                _add_circle(row, base_color, target_layer)
-
-
-# ======================
-# Search matches: red flags
-# ======================
+# 搜索命中红旗
 def render_hit_flags(map_obj, matched_df):
-    if matched_df is None or matched_df.empty:
-        return
+    if matched_df is None or matched_df.empty: return
     for _, r in matched_df.iterrows():
         dist_txt = popup_distance_text(r['Latitude'], r['Longitude'], prefer_drive=True)
         popup_obj = make_worker_popup(
-            name=r.get('Name',''),
-            level=r.get('Level',''),
-            address=_full_address_from_row(r),
-            zip_code=None,
+            name=r.get('Name',''), level=r.get('Level',''),
+            address=(r.get('Address') or f"{r.get('City','')}, {r.get('State','')}, {r.get('ZIP','')}"),
             distance_text=dist_txt,
-            contact=r.get('Contact'),
-            email=r.get('Email'),
-            phone=r.get('Phone'),
-            note=r.get('Note'),
-            is_cold=r.get('IsColdFlag', False),
-            is_hot=r.get('IsHotFlag',  False),
+            contact=r.get('Contact'), email=r.get('Email'), phone=r.get('Phone'), note=r.get('Note'),
+            is_cold=r.get('IsColdFlag', False), is_hot=r.get('IsHotFlag',  False),
         )
-        folium.Marker(
-            location=[float(r['Latitude']), float(r['Longitude'])],
-            icon=big_flag_icon(size_px=42),
-            tooltip=f"🔎 Match: {_s(r.get('Name',''))}",
-            popup=popup_obj,
-            z_index_offset=10000
-        ).add_to(map_obj)
+        folium.Marker([float(r['Latitude']), float(r['Longitude'])],
+                      icon=big_flag_icon(size_px=42),
+                      tooltip=f"🔎 Match: {str(r.get('Name',''))}",
+                      popup=popup_obj,
+                      z_index_offset=10000).add_to(map_obj)
 
 if search_active:
     render_hit_flags(m, matched)
 
-# Customer pin
+# 客户针脚（单次输入📍）
 if cust_pin:
     p = cust_pin
     folium.Marker(
-        location=[float(p["lat"]), float(p["lng"])],
+        [float(p["lat"]), float(p["lng"])],
         icon=customer_pin_icon(size_px=42),
-        tooltip=f"📍 {p.get('formatted','Customer address')}",
-        popup=f"<b>Customer:</b> {_s(p.get('formatted'))}",
+        tooltip=f"📍 {p.get('formatted', 'Customer address')}",
+        popup=f"<b>Customer:</b> {str(p.get('formatted'))}",
         z_index_offset=12000
     ).add_to(m)
 
-# Web-new layer (brown small pins)
-if "_web_new_layer" in st.session_state:
-    add_fg = folium.FeatureGroup(name="Web-new techs (fetched)", show=True).add_to(m)
-    for r in st.session_state.pop("_web_new_layer"):
-        name = _s(r.get("Name"))
-        dist_txt = popup_distance_text(r.get("Latitude"), r.get("Longitude"), prefer_drive=False)
-        popup_obj = make_worker_popup(name, r.get("Level","7"), _s(r.get("Address","")), None, dist_txt)
-        folium.Marker(
-            location=[float(r["Latitude"]), float(r["Longitude"])],
-            icon=blue_wrench_icon(size_px=18),  # smaller pin
-            tooltip=f"New: {name}",
-            popup=popup_obj
-        ).add_to(add_fg)
+# 客户上传🏠（州过滤+上限后） —— ==== CUST-STATE & 30K ====
+cust_count_for_badge = 0
+if isinstance(cust_for_map, pd.DataFrame) and (len(cust_for_map) > 0):
+    cust_points = cust_for_map.copy()
+    cust_count_for_badge = int(len(cust_points))
 
-# Initial / smart fit
+    # 3K+ 客户改用 CircleMarker 以保证流畅；关闭弹窗，仅保留 tooltip
+    heavy_cust = len(cust_points) >= 5000
+    cust_fg = folium.FeatureGroup(
+        name=f"Customers (uploaded{'' if state_choice=='All' else ' - ' + str(state_choice)})",
+        show=True
+    ).add_to(m)
+
+    def _cust_popup_row(row):
+        name = row.get("CName","")
+        addr = row.get("CAddress","")
+        contact = row.get("CContact","")
+        lat = row.get("CLatitude", np.nan)
+        lng = row.get("CLongitude", np.nan)
+        dist = "-"
+        try:
+            if pd.notna(lat) and pd.notna(lng):
+                dist = popup_distance_text(float(lat), float(lng), prefer_drive=False)
+        except Exception:
+            pass
+        html = f"""
+        <div style="min-width:240px; font-size:12.5px; line-height:1.35;">
+          <div><b>Name:</b> {str(name)}</div>
+          <div><b>Address:</b> {str(addr)}</div>
+          <div><b>Contact:</b> {str(contact) if pd.notna(contact) else ''}</div>
+          <div><b>Distance:</b> {str(dist)}</div>
+        </div>
+        """
+        return folium.Popup(html, max_width=320)
+
+    if heavy_cust:
+        # 轻量渲染（推荐 30k）
+        for _, r in cust_points.iterrows():
+            folium.CircleMarker(
+                [float(r["CLatitude"]), float(r["CLongitude"])],
+                radius=6, stroke=False, weight=0,
+                fill=True, fill_opacity=0.7,
+                tooltip=str(r.get("CName",""))
+            ).add_to(cust_fg)
+    else:
+        # 轻量阈值以下仍可用小房子图标
+        for _, r in cust_points.iterrows():
+            icon = customer_house_icon(size_px=24)
+            folium.Marker(
+                [float(r["CLatitude"]), float(r["CLongitude"])],
+                icon=icon,
+                tooltip=str(r.get("CName","")),
+                popup=None if should_disable_popups(len(points)) else _cust_popup_row(r),
+                z_index_offset=9000
+            ).add_to(cust_fg)
+
+# 初始视野
 CONUS_BOUNDS = [[24.5, -125.0], [49.5, -66.9]]
 def fit_initial_or_search(map_obj, nat_bnds, state_bnds, matched_df, search_active):
     if "_zoom_bounds" in st.session_state:
-        map_obj.fit_bounds(st.session_state.pop("_zoom_bounds"))
-        return
+        map_obj.fit_bounds(st.session_state.pop("_zoom_bounds")); return
     if search_active and matched_df is not None and len(matched_df) > 0:
         if len(matched_df) == 1:
             lat = float(matched_df['Latitude'].iloc[0]); lng = float(matched_df['Longitude'].iloc[0])
@@ -1769,40 +1455,44 @@ def fit_initial_or_search(map_obj, nat_bnds, state_bnds, matched_df, search_acti
 
 fit_initial_or_search(m, CONUS_BOUNDS, selected_bounds, matched if 'matched' in locals() else None, search_active)
 
-# Legend
-# Legend（竖列；去掉 "Level" 前缀）
-lvl_order = sorted(LEVEL_COLORS.keys())
+# 图例（右上角）
+lvl_order = [1,2,3,4,5,6]
 lvl_counts = {lvl: int(points['Level'].eq(lvl).sum()) for lvl in lvl_order}
-
 rows_html = "".join([
-    (
-        f"<div style='display:flex;align-items:center;gap:8px;margin:2px 0;'>"
-        f"<span style='display:inline-block;width:10px;height:10px;background:{LEVEL_COLORS[lvl]};"
-        f"border-radius:2px{(';border:1px solid #eee' if lvl==6 else '')}'></span>"
-        f"<span>{lvl}</span>"  # ← 这里原来是 'Level {lvl}'，已改为只显示数字
-        f"<span style='margin-left:auto'>{lvl_counts.get(lvl,0)}</span>"
-        f"</div>"
-    )
+    f"<div style='display:flex;align-items:center;gap:8px;margin:2px 0;'>"
+    f"<span style='display:inline-block;width:10px;height:10px;background:{LEVEL_COLORS[lvl]};border-radius:2px'></span>"
+    f"<span>{lvl}</span>"
+    f"<span style='margin-left:auto'>{lvl_counts.get(lvl,0)}</span>"
+    f"</div>"
     for lvl in lvl_order
 ])
-
 legend_html = f"""
 <div style="
   position: fixed; top: 10px; right: 12px; z-index: 9999;
   background: #fff; padding: 6px 8px; border-radius: 8px;
-  box-shadow: 0 2px 6px rgba(0,0,0,.20); font-size: 12px; line-height: 1.4;
+  box-shadow:0 2px 6px rgba(0,0,0,.20); font-size: 12px; line-height: 1.4;
   width: max-content; max-width: 220px; border: 1px solid rgba(0,0,0,.08);
 ">
   <div style="font-weight:600; margin-bottom:6px;">Level colors</div>
   {rows_html}
-  <div style="margin-top:6px; border-top:1px dashed #e5e7eb; padding-top:6px; font-weight:600;">
-    Total: {int(points.shape[0])}
+  <div style='margin-top:6px; border-top:1px dashed #e5e7eb; padding-top:6px; font-weight:600;'>
+    Total techs: {int(points.shape[0])}
   </div>
 </div>
 """
 m.get_root().html.add_child(folium.Element(legend_html))
 
-
+# —— 客户数量：地图左上角小字 —— #
+cust_badge_html = f"""
+<div style="
+  position: fixed; top: 10px; left: 12px; z-index: 9999;
+  background: rgba(255,255,255,.95); padding: 3px 6px; border-radius: 6px;
+  border: 1px solid #e5e7eb; font-size: 11px; line-height:1.2;
+">
+  Customers (rendered): {cust_count_for_badge}
+</div>
+"""
+m.get_root().html.add_child(folium.Element(cust_badge_html))
 
 # Layer control
 folium.LayerControl(collapsed=True, position='topleft').add_to(m)
@@ -1820,7 +1510,7 @@ def render_map_once(m):
             html(html_str, height=760, scrolling=False)
             st.caption("✅ Rendered: static HTML")
         else:
-            map_height = st.session_state.get("map_height", 760)
+            map_height = 760
             st_folium(m, use_container_width=True, height=map_height)
             st.caption("✅ Rendered: interactive (st_folium)")
     except Exception as e:
@@ -1828,3 +1518,29 @@ def render_map_once(m):
         st.stop()
 
 render_map_once(m)
+
+# ======================
+# “Only duplicate” 正下方的导出按钮（紧挨着）
+# ======================
+if only_dup:
+    slot = st.session_state.get("_dup_export_slot", None)
+    if slot and dup_points_export is not None and not dup_points_export.empty:
+        addr_series_all = dup_points_export.apply(_full_address_from_row, axis=1).map(_norm_addr_for_dup)
+        vc = addr_series_all.value_counts()
+        dup_points_export2 = dup_points_export.copy()
+        dup_points_export2.insert(0, "Duplicate Count", addr_series_all.map(vc).astype(int).values)
+        cols_pref = ["Duplicate Count","Name","Address","City","State","ZIP","Level","Latitude","Longitude","County"]
+        cols_exist = [c for c in cols_pref if c in dup_points_export2.columns]
+        dup_buf = _build_xlsx(dup_points_export2[cols_exist], sheet_name="DuplicateAddresses")
+        with st.sidebar:
+            slot.download_button(
+                "Export duplicate addresses (Excel)",
+                data=dup_buf,
+                file_name=f"duplicate_addresses_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="dl_dup_excel_sidebar"
+            )
+    elif slot:
+        with st.sidebar:
+            slot.info("No duplicate addresses under current filters.")
